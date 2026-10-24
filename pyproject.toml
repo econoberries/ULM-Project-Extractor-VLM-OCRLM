@@ -20,7 +20,9 @@ vlm = [
     "accelerate>=1.0",
     "Pillow>=10",
 ]
-ocr = ["paddleocr>=3.0,<4"]
+# Pin the PaddleOCR/PaddleX versions used by the current Helix benchmark.
+# The PaddlePaddle GPU backend is installed separately from the cu130 index.
+ocr = ["paddleocr==3.7.0", "paddlex==3.7.2"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

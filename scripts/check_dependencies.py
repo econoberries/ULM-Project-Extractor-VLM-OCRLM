@@ -7,17 +7,20 @@ Usage:
 """
 from argparse import ArgumentParser
 from importlib.metadata import PackageNotFoundError, version
+import importlib.util
 import sys
 
 REQUIRED = {
     "base": ("ulm-extractor", "PyYAML", "pandas"),
     "vlm": ("torch", "torchvision", "transformers", "accelerate", "Pillow"),
-    "ocr": ("paddlepaddle-gpu", "paddleocr"),
+    "ocr": ("paddlepaddle-gpu", "paddleocr", "paddlex"),
 }
 HELIX_EXPECTED = {
     "torch": "2.14.1+cu130",
     "torchvision": "0.29.1+cu130",
     "paddlepaddle-gpu": "3.3.0",
+    "paddleocr": "3.7.0",
+    "paddlex": "3.7.2",
 }
 
 def check(stage="all"):
@@ -45,6 +48,30 @@ def check(stage="all"):
                 mismatch.append(dist)
             else:
                 print(f"OK       {dist} {installed}")
+    if "ocr" in requested:
+        # PaddleOCR and PaddleX are NOT the PaddlePaddle execution backend.
+        # Check the Python import, not only the package distribution name.
+        try:
+            cpu_version = version("paddlepaddle")
+        except PackageNotFoundError:
+            cpu_version = None
+        if cpu_version:
+            print(f"CONFLICT paddlepaddle {cpu_version}: CPU and GPU distributions must not coexist")
+            mismatch.append("paddlepaddle")
+        if importlib.util.find_spec("paddle") is None:
+            print("MISSING  Python module 'paddle' (install paddlepaddle-gpu)")
+            missing.append("paddle")
+        else:
+            try:
+                import paddle
+                gpu_build = bool(paddle.is_compiled_with_cuda())
+                print(f"OK       import paddle {paddle.__version__}; CUDA build: {gpu_build}")
+                if not gpu_build:
+                    print("ERROR    PaddlePaddle is not compiled with CUDA")
+                    mismatch.append("paddle CUDA")
+            except Exception as exc:
+                print(f"ERROR    import paddle: {type(exc).__name__}: {exc}")
+                mismatch.append("paddle import")
     if missing or mismatch:
         print("\nEnvironment not ready for the selected Helix profile.")
         print("See README installation steps; do not submit the full benchmark yet.")

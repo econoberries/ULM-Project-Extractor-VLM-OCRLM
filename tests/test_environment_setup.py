@@ -21,6 +21,11 @@ class HelixEnvironmentContract(unittest.TestCase):
         self.assertIn("torchvision==0.29.1+cu130", pytorch)
         self.assertIn("paddlepaddle-gpu==3.3.0", paddle)
         self.assertIn("/cu130/", paddle)
+        self.assertIn("paddlepaddle-gpu", paddle)
+        self.assertNotIn("paddlepaddle==", paddle)
+        self.assertIn("paddleocr==3.7.0", tomllib.loads(
+            (ROOT / "pyproject.toml").read_text()
+        )["project"]["optional-dependencies"]["ocr"])
 
     def test_kie_only_evaluator_requirements(self):
         path = ROOT / "requirements" / "ocrbench-v2-kie-eval.txt"
@@ -34,7 +39,10 @@ class HelixEnvironmentContract(unittest.TestCase):
 
     def test_environment_checker_parses(self):
         path = ROOT / "scripts" / "check_dependencies.py"
-        ast.parse(path.read_text(encoding="utf-8"))
+        source = path.read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn('find_spec("paddle")', source)
+        self.assertIn("paddle.is_compiled_with_cuda()", source)
 
 if __name__ == "__main__":
     unittest.main()

@@ -123,13 +123,25 @@ For the current CUDA 13.0 profile, [`requirements/helix-paddle-cu130.txt`](requi
 .venv/bin/python -m pip install -r requirements/helix-paddle-cu130.txt
 ```
 
-Then install both the extractor's VLM and OCR extras:
+Then install both the extractor's VLM and OCR extras. Our current Helix versions are **PaddleOCR 3.7.0** and **PaddleX 3.7.2**, while the separately installed inference backend is **PaddlePaddle GPU 3.3.0**:
 
 ```bash
 .venv/bin/python -m pip install -e '.[vlm,ocr]'
 ```
 
-The `[vlm]` extra includes **`torchvision`**, which the previous setup omitted. The `[ocr]` extra includes **`paddleocr`**, which the previous setup did not install. The CUDA-specific PaddlePaddle wheel remains separate because it must match the cluster GPU driver and environment.
+The `[vlm]` extra includes **`torchvision`**, which the previous setup omitted. The `[ocr]` extra pins **`paddleocr==3.7.0`** and **`paddlex==3.7.2`**. **These two packages do not provide the `paddle` Python module**: install `paddlepaddle-gpu` separately from the CUDA 13.0 index. Our failed OCR job downloaded `PP-OCRv6_medium_det` successfully, then stopped with `Engine 'paddle_static' is unavailable because dependency 'paddlepaddle' is not installed.` Both `paddlepaddle-gpu` and `import paddle` were confirmed absent from that environment.
+
+Verify the backend is installed in **this project's** virtual environment:
+
+```bash
+.venv/bin/python - <<'PY'
+import paddle
+print("PaddlePaddle:", paddle.__version__)
+print("CUDA compiled:", paddle.is_compiled_with_cuda())
+PY
+```
+
+This must show `CUDA compiled: True`. It does **not** replace the A100 SLURM verification; loading a CUDA-enabled package on a login node is different from executing on a GPU.
 
 **Do not install the CPU-only `paddlepaddle` alongside `paddlepaddle-gpu`.** If pip reports conflicts, examine them before proceeding. PyTorch's CUDA build version alone does not prove PaddlePaddle will run on the A100; the SLURM tests below do that.
 
@@ -141,7 +153,7 @@ The `[vlm]` extra includes **`torchvision`**, which the previous setup omitted. 
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The dependency checker verifies the required **installed distributions and Helix CUDA 13.0 versions**. It does not need a GPU, download weights, or submit a job. In particular, it checks for the `torchvision`, `paddlepaddle-gpu`, and `paddleocr` packages that caused the initial failures.
+The dependency checker verifies required distributions and the installed `paddle` module, including whether its build supports CUDA. It runs without requesting GPU resources. In particular, it rejects an environment that has only `paddleocr` and `paddlex` but is missing `paddlepaddle-gpu`, which caused the latest OCR failure.
 
 If your full evaluator is not yet available, clone its repository:
 
@@ -239,7 +251,43 @@ After the environment tests and a one-document model inference succeed, submit t
 
 Default scheduling uses `gpu-single`, `gpu:A100:1`, four CPUs, 64 GiB host RAM and two hours per GPU job; the collector uses `cpu-single`. The official evaluator defaults to a checkout in `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to the project. Override with `--evaluator /path/to/eval.py` if needed.
 
-**Do not rerun the entire benchmark merely to test an installation fix.** The first four-model attempt produced no scored documents: the two VLMs were missing Torchvision, and the shared OCR job was missing PaddleOCR. Validate the GPU and model smoke tests before spending time on another full run.
+**Do not rerun the entire benchmark to fix the OCR environment.** Our latest batch already has **400/400 officially scored direct VLM predictions each** (Qwen3.5-9B F1 **0.8707**; MiniCPM-V-4.6 F1 **0.5593**). Only the shared OCR job and the two OCR + LM runs failed. After verifying PaddlePaddle GPU and the single-image OCR test, use **`extractor resume --ocr-only`** below.
+
+### Resume the existing batch — no direct VLM inference
+
+**Use this instead of \`extractor benchmark\` when repairing a failed batch.** A fresh \`benchmark\` command creates new run UUIDs and schedules all configured models; \`resume\` reads the **original immutable** \`batch.json\`, keeps its run IDs, checks which predictions already exist, and submits only the incomplete jobs. \`--ocr-only\` adds an explicit guarantee: **no direct VLM GPU jobs are submitted**, regardless of their recorded state.
+
+Our existing batch is \`5dd8a6af-de7f-4d4c-b496-44068933a072\`. First install and verify \`paddlepaddle-gpu\`, then make sure the PaddlePaddle and single-image OCR SLURM checks have **PASSED**.
+
+\`\`\`bash
+cd ~/ULM-Project-Extractor-VLM-OCRLM
+git pull --ff-only origin main
+.venv/bin/python -m pip install -e .
+.venv/bin/python scripts/check_dependencies.py --stage all
+
+BATCH="$PWD/runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/batch.json"
+
+# Verify the plan. This submits nothing and writes no files.
+.venv/bin/extractor resume --batch "$BATCH" --ocr-only --dry-run
+
+# Only after reviewing the jobs displayed above:
+.venv/bin/extractor resume --batch "$BATCH" --ocr-only
+\`\`\`
+
+For this batch, the plan should show: **SKIP \`qwen35_vlm\` and \`minicpm_vlm\`**, submit one shared PaddleOCR GPU job, then **\`qwen35_ocr\` and \`qwen25_ocr\`** GPU jobs depending on OCR, and finally a CPU-only collector. If all 400 OCR texts were previously cached, \`resume\` can reuse the cache and omit the OCR GPU job. The OCR worker resumes any incomplete cache documents; model workers also reuse valid saved document predictions.
+
+The original \`batch.json\`, \`jobs.json\`, existing VLM \`predictions.json\`, and saved VLM scores are **not overwritten**. Each resubmission's job IDs are recorded separately under \`runs/batches/<batch-id>/resumes/\`. SLURM logs remain under that batch's \`logs/\` directory. The collector reuses already scored official VLM outputs and updates both the batch-specific and top-level comparison CSV.
+
+Check the completed run and summary:
+
+\`\`\`bash
+cat runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/jobs.json
+ls runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/resumes/
+squeue -u "$USER"
+cat runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/benchmark_summary.csv
+\`\`\`
+
+**Safety:** \`resume\` refuses to schedule a selected model still marked \`submitted\` or \`running\`. Let the old SLURM job finish and inspect \`sacct\` before attempting a retry; never submit two workers simultaneously for the same run ID. A batch with scored VLMs is safe to resume with \`--ocr-only\`.
 
 ### Retry official scoring without rerunning GPU inference
 
@@ -293,6 +341,8 @@ Inference timing includes model input preparation, generation and decoding; OCR 
 | `.venv/bin/python: No such file or directory` | Create the virtual environment from the repository root; verify Python and pip before installing. |
 | `Torchvision library ... was not found` | Install `requirements/helix-pytorch-cu130.txt`, then the `[vlm]` extra. Match the Torchvision **CUDA 13.0** wheel to the installed CUDA 13.0 Torch build. |
 | `No module named paddleocr` | Install `-e '.[ocr]'`; also install and verify **GPU PaddlePaddle** separately. |
+| `Engine 'paddle_static' ... dependency 'paddlepaddle' is not installed` | PaddleOCR and PaddleX exist, but `paddle` is missing. Install `requirements/helix-paddle-cu130.txt` in the current `.venv`, check `import paddle`, then run the PaddlePaddle and OCR smoke tests. Do **not** install CPU-only `paddlepaddle` alongside `paddlepaddle-gpu`. |
+| Need to resume only OCR + LM | Use `extractor resume --batch /path/to/original/batch.json --ocr-only`, preceded by `--dry-run`. Do not submit a fresh `extractor benchmark`. |
 | `scoring_failed` after 400 completed predictions | The GPU inference succeeded but the official evaluator failed. Inspect `runs/<run-uuid>/scoring.log`; install `requirements/ocrbench-v2-kie-eval.txt`. **Do not rerun model inference.** Resubmit the CPU collector for the existing batch, as shown above. |
 | `Polygon3` build error: `Python.h: No such file or directory` | For **English KIE only**, install `requirements/ocrbench-v2-kie-eval.txt` instead of upstream's full requirements file. It omits text-spotting-only Polygon3; the official scoring code is unchanged. |
 | OCR + LM reports missing `ocr/paddleocr/index.json` | Inspect the shared OCR job log first; the missing cache is usually a downstream symptom of an OCR failure. |
