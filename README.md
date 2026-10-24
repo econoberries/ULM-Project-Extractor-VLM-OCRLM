@@ -1,4 +1,41 @@
-# ULM Project Extractor — VLM and OCR→LM
+# ULM Project Extractor with VLM and OCR + LM
+
+These days extracting information from document images has become an increasingly common,
+one can use LM to do such tasks. Common methods include using Vision-Language Model (VLM)
+to interpret a document directly or process via LM the OCR extracted text from the images. 
+In achieving accurate results, these methods might use computational resources differently. 
+
+In this project we want to compare the performance of VLM and OCR+LM in doing this kind of task. 
+Through this project, we try to understand the trade-offs between extraction accuracy, inference time, 
+and computational requirements between the two methods.
+
+To explore this question, we develop a benchmarking tool that compares these two approaches on 
+**Key Information Extraction (KIE)** tasks. Our evaluation is based on 400 English KIE samples from 
+**[OCRBench v2: An Improved Benchmark for Evaluating Large Multimodal Models on Visual Text Localization and Reasoning](https://proceedings.neurips.cc/paper_files/paper/2025/hash/8c2e6bb15be1894b8fb4e0f9bcad1739-Abstract-Datasets_and_Benchmarks_Track.html)** (Fu et al., 2025). 
+The benchmark dataset and official evaluation code are available in the authors' [MultimodalOCR GitHub repository](https://github.com/Yuliang-Liu/MultimodalOCR).
+
+We compare **Qwen3.5-9B** and **MiniCPM-V-4.6** as end-to-end VLMs against 
+OCR + LM pipelines using **PaddleOCR** with **Qwen3.5-9B** and **Qwen2.5-14B-Instruct-1M**. 
+
+These models were selected to explore different model architectures and computational requirements. 
+In particular, using Qwen3.5 in both approaches allows us to examine how the extraction pipeline itself affects performance, 
+while MiniCPM provides another VLM architecture and Qwen2.5 offers a dedicated text-language-model comparison.
+
+The framework is designed for SLURM-based high-performance computing (HPC) environments, 
+allowing users to configure and benchmark multiple models through a single model.yml file. 
+
+
+Requirement in running this project
+1. abcd
+2. efgh
+3. ijkl
+4. mnop
+5. qrst
+
+It requires only the dataset's EN_part/ directory and the model configuration file, 
+automatically locates the benchmark annotations, and preserves the original OCRBench questions for consistent evaluation.
+
+
 
 A **SLURM-first, configuration-driven benchmark runner** for 400 English key-information-extraction records from OCRBench v2.
 
