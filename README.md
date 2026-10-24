@@ -149,9 +149,11 @@ If your full evaluator is not yet available, clone its repository:
 # Only when ~/MultimodalOCR does not already exist:
 git clone https://github.com/Yuliang-Liu/MultimodalOCR.git ~/MultimodalOCR
 
-.venv/bin/python -m pip install -r ~/MultimodalOCR/OCRBench_v2/requirements.txt
+.venv/bin/python -m pip install -r requirements/ocrbench-v2-kie-eval.txt
 .venv/bin/python -m pip check
 ```
+
+**Why a separate KIE requirements file?** The upstream `OCRBench_v2/requirements.txt` includes `Polygon3`, which failed to compile on Helix's Python 3.12 because the compiler could not find `Python.h`. Polygon is loaded dynamically only for the **text-spotting** metric, not English KIE. Our [`requirements/ocrbench-v2-kie-eval.txt`](requirements/ocrbench-v2-kie-eval.txt) keeps the other dependencies required to import and run the **unchanged official `eval.py` for KIE**, avoiding the unnecessary C-extension build. If you evaluate other OCRBench tasks, this selective environment may be insufficient.
 
 Use the same official evaluator commit for every run (previous project reference: `4e363b3f499811b43d792ef0bb33932ef05eca27`). Check dependency compatibility again after installing its requirements.
 
@@ -247,7 +249,7 @@ For the batch `5dd8a6af-de7f-4d4c-b496-44068933a072`:
 
 ```bash
 cd ~/ULM-Project-Extractor-VLM-OCRLM
-.venv/bin/python -m pip install -r ~/MultimodalOCR/OCRBench_v2/requirements.txt
+.venv/bin/python -m pip install -r requirements/ocrbench-v2-kie-eval.txt
 .venv/bin/python -m pip check
 
 sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \\
@@ -257,7 +259,7 @@ sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \\
   --batch "$PWD/runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/batch.json"
 ```
 
-This submits a **CPU-only scoring job**. It does not load models, use an A100, regenerate predictions, or replace the previous run UUIDs. View the batch-scoped `benchmark_summary.csv` and the SLURM log afterward. If scoring still fails, inspect `runs/<run-uuid>/scoring.log` for the full official evaluator traceback.
+This submits a **CPU-only scoring job**. It uses the original OCRBench v2 evaluator without any changes to the scoring functions. It does not load models, use an A100, regenerate predictions, or replace the previous run UUIDs. View the batch-scoped `benchmark_summary.csv` and the SLURM log afterward. If scoring still fails, inspect `runs/<run-uuid>/scoring.log` for the full official evaluator traceback.
 
 ## Outputs
 
@@ -291,7 +293,8 @@ Inference timing includes model input preparation, generation and decoding; OCR 
 | `.venv/bin/python: No such file or directory` | Create the virtual environment from the repository root; verify Python and pip before installing. |
 | `Torchvision library ... was not found` | Install `requirements/helix-pytorch-cu130.txt`, then the `[vlm]` extra. Match the Torchvision **CUDA 13.0** wheel to the installed CUDA 13.0 Torch build. |
 | `No module named paddleocr` | Install `-e '.[ocr]'`; also install and verify **GPU PaddlePaddle** separately. |
-| `scoring_failed` after 400 completed predictions | The GPU inference succeeded but the official evaluator failed. Inspect `runs/<run-uuid>/scoring.log`; install missing evaluation dependencies. **Do not rerun model inference.** Resubmit the CPU collector for the existing batch, as shown below. |
+| `scoring_failed` after 400 completed predictions | The GPU inference succeeded but the official evaluator failed. Inspect `runs/<run-uuid>/scoring.log`; install `requirements/ocrbench-v2-kie-eval.txt`. **Do not rerun model inference.** Resubmit the CPU collector for the existing batch, as shown above. |
+| `Polygon3` build error: `Python.h: No such file or directory` | For **English KIE only**, install `requirements/ocrbench-v2-kie-eval.txt` instead of upstream's full requirements file. It omits text-spotting-only Polygon3; the official scoring code is unchanged. |
 | OCR + LM reports missing `ocr/paddleocr/index.json` | Inspect the shared OCR job log first; the missing cache is usually a downstream symptom of an OCR failure. |
 | GPU check shows `False` or CUDA errors | Inspect `nvidia-smi`, the SLURM node allocation, CUDA wheel compatibility, and the full job log; do not blindly reinstall. |
 | `gpu-check-<id>.out` missing | Check `squeue` and `scontrol show job <id>`; SLURM may not have started the job yet. |

@@ -1,0 +1,20 @@
+# OCRBench v2 official eval.py import dependencies for our English KIE-only benchmark.
+# Based on MultimodalOCR/OCRBench_v2/requirements.txt, excluding Polygon3.
+# Polygon3 compiles a C extension requiring Python.h, often unavailable on Helix;
+# the official scorer only imports Polygon dynamically for TEXT SPOTTING, not KIE.
+# This file does NOT alter the official eval.py, TEDS_metric.py, or KIE scoring rules.
+#
+# Use this file ONLY for the "key information extraction en" subset.
+# Running ALL OCRBench v2 tasks (including text spotting) needs the full
+# upstream dependencies and a working Polygon3 installation.
+numpy
+distance
+apted
+lxml
+zss
+Levenshtein
+editdistance
+nltk
+jieba
+tqdm
+ipdb

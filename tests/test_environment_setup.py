@@ -22,6 +22,16 @@ class HelixEnvironmentContract(unittest.TestCase):
         self.assertIn("paddlepaddle-gpu==3.3.0", paddle)
         self.assertIn("/cu130/", paddle)
 
+    def test_kie_only_evaluator_requirements(self):
+        path = ROOT / "requirements" / "ocrbench-v2-kie-eval.txt"
+        packages = [line.strip().lower() for line in path.read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+        self.assertIn("apted", packages)
+        self.assertIn("distance", packages)
+        self.assertIn("ipdb", packages)
+        self.assertIn("lxml", packages)
+        self.assertNotIn("polygon3", packages)
+
     def test_environment_checker_parses(self):
         path = ROOT / "scripts" / "check_dependencies.py"
         ast.parse(path.read_text(encoding="utf-8"))
