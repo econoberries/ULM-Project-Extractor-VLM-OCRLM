@@ -13,5 +13,7 @@ jobs:
           python-version: "3.12"
       - name: Install lightweight orchestrator
         run: python -m pip install -e .
+      - name: Validate SLURM test Bash syntax
+        run: bash -n slurm/check_environment.sbatch
       - name: Run offline unit tests
         run: python -m unittest discover -s tests -v

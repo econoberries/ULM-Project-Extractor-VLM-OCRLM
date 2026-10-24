@@ -156,9 +156,11 @@ EN_PART="$HOME/ULM-VLM-OCR-IE/data/OCRBench_v2/EN_part"
 
 IMAGE="$(find "$EN_PART" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit)"
 echo "$IMAGE"
-test -n "$IMAGE" && test -f "$IMAGE" || { echo "No OCRBench image found"; exit 1; }
-
-sbatch slurm/check_environment.sbatch ocr "$IMAGE"
+if [[ -n "$IMAGE" && -f "$IMAGE" ]]; then
+  sbatch slurm/check_environment.sbatch ocr "$IMAGE"
+else
+  echo "No OCRBench image found; check EN_PART."
+fi
 ```
 
 This creates **one GPU job and processes only that image**, using the exact PaddleOCR initialization flags from `src/ulm_extractor/ocr.py`. Expected output includes a number of recognized text lines and `PaddleOCR single-image inference: PASSED`. First-time PaddleOCR weight downloads can take additional time; downloads are not benchmark measurements. If model downloads fail due to compute-node network restrictions, configure the model cache separately.
