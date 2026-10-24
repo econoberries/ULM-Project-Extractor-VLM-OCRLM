@@ -50,8 +50,8 @@ def load_config(path):
             if checkpoint != standard_checkpoint:
                 raise ValueError(f"{exp_id}: custom checkpoint requires an explicit immutable revision")
             revision = standard_revision
-        if not isinstance(revision, str) or not revision.strip() or revision in {"main", "latest"}:
-            raise ValueError(f"{exp_id}: specify an immutable checkpoint revision")
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise ValueError(f"{exp_id}: revision must be an immutable 40-character commit SHA")
         ocr = item.get("ocr")
         if pipe == "ocr_lm" and ocr != "paddleocr":
             raise ValueError(f"{exp_id}: OCR->LM requires ocr: paddleocr")

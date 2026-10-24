@@ -58,8 +58,8 @@ def run_ocr(batch):
         start = time.perf_counter()
         response = ocr.predict(str(image_path))
         synchronize_paddle()
-        elapsed = time.perf_counter() - start
         content = "\n".join(extract_text(entry) for entry in response)
+        elapsed = time.perf_counter() - start
         text_path.parent.mkdir(parents=True, exist_ok=True)
         text_path.write_text(content, encoding="utf-8")
         index["records"][doc_key] = {
