@@ -193,6 +193,52 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result["batch_id"], batch["batch_id"])
         self.assertEqual(len(list((batch_path.parent / "resumes").glob("*.json"))), 1)
 
+    def test_resume_reuses_complete_ocr_cache_from_separate_env(self):
+        from unittest.mock import Mock
+        from ulm_extractor.storage import key_for
+
+        data = load_documents(self.images)
+        with patch("ulm_extractor.scheduler._sbatch", side_effect=["801", "802", "803", "804"]):
+            submission = submit_batch(data, load_config(self.yml), self.scheduler_args())
+        batch = read_json(submission["batch_path"])
+        for m in batch["runs"]:
+            status_path = self.base / "runs" / m["run_id"] / "run.json"
+            status = read_json(status_path)
+            status["status"] = "failed"
+            write_json(status_path, status)
+
+        cache_dir = self.base / "runs" / "batches" / batch["batch_id"] / "ocr" / "paddleocr"
+        cache_records = {}
+        for i, record in enumerate(self.original):
+            key = key_for(record)
+            text_path = cache_dir / "text" / (key + ".txt")
+            text_path.parent.mkdir(parents=True, exist_ok=True)
+            text_path.write_text("OCR contents", encoding="utf-8")
+            cache_records[key] = {"text_path": str(text_path), "ocr_seconds": 0.1}
+        write_json(cache_dir / "index.json", {
+            "manifest_sha256": batch["manifest_sha256"],
+            "paddleocr_version": "3.7.0",
+            "records": cache_records,
+        })
+
+        fake_root = self.base / "fake_repository"
+        python = fake_root / ".venv-ocr" / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.touch()
+        opts = argparse.Namespace(ocr_only=True, dry_run=False, partition="gpu-single",
+                                  collector_partition="cpu-single", gres="gpu:A100:1",
+                                  cpus=4, mem="64G", time="02:00:00")
+        jobs = []
+        def fake_sbatch(command, dry):
+            jobs.append(command)
+            return str(900 + len(jobs))
+        with patch("ulm_extractor.resume.ROOT", fake_root), \\
+             patch("ulm_extractor.resume.subprocess.run", return_value=Mock(stdout="3.7.0\\n")), \\
+             patch("ulm_extractor.resume._sbatch", side_effect=fake_sbatch):
+            resume_batch(submission["batch_path"], opts)
+        self.assertEqual(len(jobs), 2)  # OCR-LM + CPU collector, no shared OCR
+        self.assertFalse(any("ulm-ocr-resume" in command for command in jobs))
+
     def test_resume_dry_run_does_not_write_anything(self):
         data = load_documents(self.images)
         with patch("ulm_extractor.scheduler._sbatch", side_effect=["401", "402", "403", "404"]):
