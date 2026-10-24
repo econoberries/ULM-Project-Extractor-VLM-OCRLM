@@ -139,6 +139,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(row["status"], "scored")
         self.assertAlmostEqual(row["official_kie_f1"], 0.75)
         self.assertEqual(read_json(status_path)["status"], "scored")
+        self.assertNotIn("error", read_json(status_path))
         self.assertEqual(len(read_json(run_dir / "predictions.json")), 400)
 
     def test_dry_run_does_not_write_or_submit(self):

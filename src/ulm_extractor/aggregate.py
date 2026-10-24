@@ -101,6 +101,7 @@ def run_summary(batch, spec):
                                       str(r.get("dataset_name", "")).casefold() == name.casefold()])
             row["status"] = "scored"
             state["status"] = "scored"
+            state.pop("error", None)  # clear error from any prior scoring attempt
             write_json(status_path, state)
         except Exception as exc:
             row["status"] = "scoring_failed"
