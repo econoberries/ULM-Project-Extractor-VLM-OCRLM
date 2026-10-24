@@ -117,6 +117,87 @@ git clone https://github.com/Yuliang-Liu/MultimodalOCR.git ~/MultimodalOCR
 
 For reproducible comparisons, use the same evaluator commit across runs (earlier reference: `4e363b3f499811b43d792ef0bb33932ef05eca27`). Check dependency compatibility after installing the evaluator's requirements.
 
+### Step 5 — Verify GPU frameworks with small SLURM jobs
+
+The quick tests are **committed to this repository**. You do **not** need `salloc`, `uv`, or an interactive GPU shell. Submit the tests with `sbatch` as in the previous Qwen project. SLURM allocates the A100 automatically, runs one short test on a compute node, and records the results in a log file.
+
+Start from the new repository on the Helix login node:
+
+```bash
+cd ~/ULM-Project-Extractor-VLM-OCRLM
+git pull --ff-only origin main
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+The test job script is `slurm/check_environment.sbatch` and its Python programs are in `scripts/`. It requests **one A100 GPU**, **4 CPUs**, **16 GiB host RAM**, and **20 minutes** by default. Jobs run the test in the new `.venv`; they do not alter the original Qwen environment or submit any full benchmark.
+
+**5a. PyTorch + Transformers CUDA test**
+
+```bash
+sbatch slurm/check_environment.sbatch torch
+```
+
+The output should show `CUDA available: True`, an A100 GPU, and `PyTorch CUDA: PASSED`. This executes an actual 512×512 GPU matrix multiplication in PyTorch.
+
+**5b. PaddlePaddle CUDA test (separate Python process)**
+
+```bash
+sbatch slurm/check_environment.sbatch paddle
+```
+
+The output should show `CUDA compiled: True`, a visible GPU, and `PaddlePaddle CUDA: PASSED`. This performs a GPU matrix multiplication using PaddlePaddle, not PyTorch. If `paddle` is missing or compiled CPU-only, install a **Helix-compatible** `paddlepaddle-gpu` distribution into `.venv` after checking the node's CUDA driver and wheel compatibility. Do not mix CPU-only and GPU PaddlePaddle installations.
+
+**5c. Real PaddleOCR inference on one OCRBench image**
+
+After the PaddlePaddle test succeeds, select one actual image. Adjust `EN_PART` if the dataset is stored elsewhere:
+
+```bash
+EN_PART="$HOME/ULM-VLM-OCR-IE/data/OCRBench_v2/EN_part"
+
+IMAGE="$(find "$EN_PART" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit)"
+echo "$IMAGE"
+test -n "$IMAGE" && test -f "$IMAGE" || { echo "No OCRBench image found"; exit 1; }
+
+sbatch slurm/check_environment.sbatch ocr "$IMAGE"
+```
+
+This creates **one GPU job and processes only that image**, using the exact PaddleOCR initialization flags from `src/ulm_extractor/ocr.py`. Expected output includes a number of recognized text lines and `PaddleOCR single-image inference: PASSED`. First-time PaddleOCR weight downloads can take additional time; downloads are not benchmark measurements. If model downloads fail due to compute-node network restrictions, configure the model cache separately.
+
+**5d. Optional direct VLM smoke test on ONE document**
+
+This step is useful after PyTorch succeeds and model weights are accessible. It actually loads the Qwen3.5 adapter and runs inference on the *first* English KIE image with the **unaltered OCRBench question**. It does not evaluate or process 400 documents, does not change `model.yml`, and uses a **64-token temporary cap** only for the smoke test.
+
+```bash
+sbatch --mem=64G --time=00:45:00 \
+  slurm/check_environment.sbatch model "$EN_PART" qwen35_vlm
+```
+
+Expected output: model ID, GPU, number of tokens generated, a sample prediction, and `Single-document model inference: PASSED`. This test may need model downloads and uses significantly more GPU memory/time than the three framework tests, so it is **optional** until you are ready to verify actual model inference. If your config uses a different ID, replace `qwen35_vlm`.
+
+**How to read the test results**
+
+Each `sbatch` command prints a job ID such as `Submitted batch job 12345678`. Check its status:
+
+```bash
+squeue -u "$USER"
+```
+
+After the job exits, inspect the corresponding log **using the actual job number**:
+
+```bash
+cat gpu-check-12345678.out
+```
+
+Use `tail -n 60 gpu-check-12345678.out` for a shorter error report. You can also check the exit state with:
+
+```bash
+sacct -j 12345678 --format=JobID,State,ExitCode
+```
+
+Do not interpret merely seeing `nvidia-smi` as success: look for each script's `PASSED` line. If a job fails, **share the log before changing library versions**.
+
+The offline unit tests and GitHub Actions only validate the Python logic; the four GPU smoke tests require an actual Helix A100 job and have not been executed by GitHub Actions.
+
 ### Troubleshooting the initial Helix setup
 
 | Symptom | Explanation and next action |
