@@ -1,0 +1,30 @@
+version: 1
+
+inference:
+  prompt_mode: benchmark_native
+  max_new_tokens: 384
+  batch_size: 1
+  do_sample: false
+
+models:
+  - id: qwen35_vlm
+    pipeline: vlm
+    adapter: qwen35
+    checkpoint: Qwen/Qwen3.5-9B
+
+  - id: minicpm_vlm
+    pipeline: vlm
+    adapter: minicpm
+    checkpoint: openbmb/MiniCPM-V-4.6
+
+  - id: qwen35_ocr
+    pipeline: ocr_lm
+    adapter: qwen35
+    checkpoint: Qwen/Qwen3.5-9B
+    ocr: paddleocr
+
+  - id: qwen25_ocr
+    pipeline: ocr_lm
+    adapter: qwen25
+    checkpoint: Qwen/Qwen2.5-14B-Instruct-1M
+    ocr: paddleocr
