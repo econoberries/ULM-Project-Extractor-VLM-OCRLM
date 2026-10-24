@@ -55,6 +55,10 @@ class InferenceAdapter:
         max_tokens = self.config["max_new_tokens"]
         is_vlm = self.config["pipeline"] == "vlm"
         adapter = self.config["adapter"]
+        for i in range(torch.cuda.device_count()):
+            torch.cuda.reset_peak_memory_stats(i)
+        self._synchronize()
+        start = time.perf_counter()
         if is_vlm:
             if not image_path:
                 raise ValueError("VLM requires an image")
@@ -69,10 +73,6 @@ class InferenceAdapter:
             payload = ocr_text + "\n\n" + question
             content = payload if adapter == "qwen25" else [{"type": "text", "text": payload}]
             messages = [{"role": "user", "content": content}]
-        for i in range(torch.cuda.device_count()):
-            torch.cuda.reset_peak_memory_stats(i)
-        self._synchronize()
-        start = time.perf_counter()
         options = dict(tokenize=True, add_generation_prompt=True,
                        return_dict=True, return_tensors="pt")
         if adapter == "minicpm":

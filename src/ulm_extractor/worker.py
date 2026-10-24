@@ -41,6 +41,15 @@ def run_model(batch, run_id):
     to_run = [record for record in records
               if key_for(record) not in existing or existing[key_for(record)].get("error")]
     try:
+        ocr_index = None
+        if spec["pipeline"] == "ocr_lm":
+            cache_path = Path(batch["output_root"]) / "batches" / batch["batch_id"] / "ocr" / "paddleocr" / "index.json"
+            cache = read_json(cache_path)
+            if cache.get("manifest_sha256") != batch["manifest_sha256"]:
+                raise ValueError("OCR cache does not match the benchmark manifest")
+            ocr_index = cache["records"]
+            if len(ocr_index) != 400 or any(key_for(r) not in ocr_index for r in records):
+                raise ValueError("Shared OCR cache is incomplete; not loading the language model")
         if to_run:
             model.load()
             environment = model.environment()
@@ -53,10 +62,6 @@ def run_model(batch, run_id):
             })
         else:
             print(f"Already have {len(existing)} predictions; skipping model loading")
-        ocr_index = None
-        if spec["pipeline"] == "ocr_lm":
-            cache_path = Path(batch["output_root"]) / "batches" / batch["batch_id"] / "ocr" / "paddleocr" / "index.json"
-            ocr_index = read_json(cache_path)["records"]
         for position, record in enumerate(records, 1):
             key = key_for(record)
             if key in existing and not existing[key].get("error"):

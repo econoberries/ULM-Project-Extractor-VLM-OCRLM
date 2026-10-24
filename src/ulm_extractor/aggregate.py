@@ -83,6 +83,9 @@ def run_summary(batch, spec):
         except Exception as exc:
             row["status"] = "scoring_failed"
             row["scoring_error"] = f"{type(exc).__name__}: {exc}"
+            state["status"] = "scoring_failed"
+            state["error"] = row["scoring_error"]
+            write_json(status_path, state)
     write_json(run_dir / "metrics.json", row)
     return row
 

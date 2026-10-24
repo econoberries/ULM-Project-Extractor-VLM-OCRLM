@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0,<7", "pandas>=2.0,<3"]
 
 [project.optional-dependencies]
-vlm = ["torch>=2.4", "transformers>=5.0", "accelerate>=1.0", "Pillow>=10"]
+vlm = ["torch>=2.14.1", "transformers>=5.19.0", "accelerate>=1.0", "Pillow>=10"]
 ocr = ["paddleocr>=3.0,<4"]
 dev = ["pytest>=8.0"]
 

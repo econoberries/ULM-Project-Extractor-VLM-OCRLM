@@ -76,7 +76,7 @@ def submit_batch(data, models, args):
             "--output", logpath,
         ]
         if model["pipeline"] == "ocr_lm":
-            command += ["--dependency", f"afterok:{jobs['paddleocr']}"]
+            command += ["--dependency", f"afterany:{jobs['paddleocr']}"]
         command += [
             str(ROOT / "slurm" / "worker.sbatch"),
             "run", "--batch", batcharg, "--run-id", model["run_id"]
