@@ -255,11 +255,11 @@ Default scheduling uses `gpu-single`, `gpu:A100:1`, four CPUs, 64 GiB host RAM a
 
 ### Resume the existing batch — no direct VLM inference
 
-**Use this instead of \`extractor benchmark\` when repairing a failed batch.** A fresh \`benchmark\` command creates new run UUIDs and schedules all configured models; \`resume\` reads the **original immutable** \`batch.json\`, keeps its run IDs, checks which predictions already exist, and submits only the incomplete jobs. \`--ocr-only\` adds an explicit guarantee: **no direct VLM GPU jobs are submitted**, regardless of their recorded state.
+**Use this instead of `extractor benchmark` when repairing a failed batch.** A fresh `benchmark` command creates new run UUIDs and schedules all configured models; `resume` reads the **original immutable** `batch.json`, keeps its run IDs, checks which predictions already exist, and submits only the incomplete jobs. `--ocr-only` adds an explicit guarantee: **no direct VLM GPU jobs are submitted**, regardless of their recorded state.
 
-Our existing batch is \`5dd8a6af-de7f-4d4c-b496-44068933a072\`. First install and verify \`paddlepaddle-gpu\`, then make sure the PaddlePaddle and single-image OCR SLURM checks have **PASSED**.
+Our existing batch is `5dd8a6af-de7f-4d4c-b496-44068933a072`. First install and verify `paddlepaddle-gpu`, then make sure the PaddlePaddle and single-image OCR SLURM checks have **PASSED**.
 
-\`\`\`bash
+```bash
 cd ~/ULM-Project-Extractor-VLM-OCRLM
 git pull --ff-only origin main
 .venv/bin/python -m pip install -e .
@@ -272,22 +272,22 @@ BATCH="$PWD/runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/batch.json"
 
 # Only after reviewing the jobs displayed above:
 .venv/bin/extractor resume --batch "$BATCH" --ocr-only
-\`\`\`
+```
 
-For this batch, the plan should show: **SKIP \`qwen35_vlm\` and \`minicpm_vlm\`**, submit one shared PaddleOCR GPU job, then **\`qwen35_ocr\` and \`qwen25_ocr\`** GPU jobs depending on OCR, and finally a CPU-only collector. If all 400 OCR texts were previously cached, \`resume\` can reuse the cache and omit the OCR GPU job. The OCR worker resumes any incomplete cache documents; model workers also reuse valid saved document predictions.
+For this batch, the plan should show: **SKIP `qwen35_vlm` and `minicpm_vlm`**, submit one shared PaddleOCR GPU job, then **`qwen35_ocr` and `qwen25_ocr`** GPU jobs depending on OCR, and finally a CPU-only collector. If all 400 OCR texts were previously cached, `resume` can reuse the cache and omit the OCR GPU job. The OCR worker resumes any incomplete cache documents; model workers also reuse valid saved document predictions.
 
-The original \`batch.json\`, \`jobs.json\`, existing VLM \`predictions.json\`, and saved VLM scores are **not overwritten**. Each resubmission's job IDs are recorded separately under \`runs/batches/<batch-id>/resumes/\`. SLURM logs remain under that batch's \`logs/\` directory. The collector reuses already scored official VLM outputs and updates both the batch-specific and top-level comparison CSV.
+The original `batch.json`, `jobs.json`, existing VLM `predictions.json`, and saved VLM scores are **not overwritten**. Each resubmission's job IDs are recorded separately under `runs/batches/<batch-id>/resumes/`. SLURM logs remain under that batch's `logs/` directory. The collector reuses already scored official VLM outputs and updates both the batch-specific and top-level comparison CSV.
 
 Check the completed run and summary:
 
-\`\`\`bash
+```bash
 cat runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/jobs.json
 ls runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/resumes/
 squeue -u "$USER"
 cat runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/benchmark_summary.csv
-\`\`\`
+```
 
-**Safety:** \`resume\` refuses to schedule a selected model still marked \`submitted\` or \`running\`. Let the old SLURM job finish and inspect \`sacct\` before attempting a retry; never submit two workers simultaneously for the same run ID. A batch with scored VLMs is safe to resume with \`--ocr-only\`.
+**Safety:** `resume` refuses to schedule a selected model still marked `submitted` or `running`. Let the old SLURM job finish and inspect `sacct` before attempting a retry; never submit two workers simultaneously for the same run ID. A batch with scored VLMs is safe to resume with `--ocr-only`.
 
 ### Retry official scoring without rerunning GPU inference
 
