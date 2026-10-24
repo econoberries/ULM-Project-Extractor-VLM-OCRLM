@@ -300,10 +300,10 @@ cd ~/ULM-Project-Extractor-VLM-OCRLM
 .venv/bin/python -m pip install -r requirements/ocrbench-v2-kie-eval.txt
 .venv/bin/python -m pip check
 
-sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \\
-  --time=00:30:00 --job-name=ulm-rescore \\
-  --output=rescore-%j.out \\
-  slurm/collector.sbatch collect \\
+sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \
+  --time=00:30:00 --job-name=ulm-rescore \
+  --output=rescore-%j.out \
+  slurm/collector.sbatch collect \
   --batch "$PWD/runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/batch.json"
 ```
 
