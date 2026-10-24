@@ -239,6 +239,26 @@ Default scheduling uses `gpu-single`, `gpu:A100:1`, four CPUs, 64 GiB host RAM a
 
 **Do not rerun the entire benchmark merely to test an installation fix.** The first four-model attempt produced no scored documents: the two VLMs were missing Torchvision, and the shared OCR job was missing PaddleOCR. Validate the GPU and model smoke tests before spending time on another full run.
 
+### Retry official scoring without rerunning GPU inference
+
+If a model has **400 completed predictions** but `status=scoring_failed`, the `predictions.json` file is already usable. Our collector can retry scoring previously failed results, keep the same UUIDs, and preserve the complete evaluator traceback in each run's `scoring.log`.
+
+For the batch `5dd8a6af-de7f-4d4c-b496-44068933a072`:
+
+```bash
+cd ~/ULM-Project-Extractor-VLM-OCRLM
+.venv/bin/python -m pip install -r ~/MultimodalOCR/OCRBench_v2/requirements.txt
+.venv/bin/python -m pip check
+
+sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \\
+  --time=00:30:00 --job-name=ulm-rescore \\
+  --output=rescore-%j.out \\
+  slurm/collector.sbatch collect \\
+  --batch "$PWD/runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/batch.json"
+```
+
+This submits a **CPU-only scoring job**. It does not load models, use an A100, regenerate predictions, or replace the previous run UUIDs. View the batch-scoped `benchmark_summary.csv` and the SLURM log afterward. If scoring still fails, inspect `runs/<run-uuid>/scoring.log` for the full official evaluator traceback.
+
 ## Outputs
 
 ```text
@@ -271,6 +291,7 @@ Inference timing includes model input preparation, generation and decoding; OCR 
 | `.venv/bin/python: No such file or directory` | Create the virtual environment from the repository root; verify Python and pip before installing. |
 | `Torchvision library ... was not found` | Install `requirements/helix-pytorch-cu130.txt`, then the `[vlm]` extra. Match the Torchvision **CUDA 13.0** wheel to the installed CUDA 13.0 Torch build. |
 | `No module named paddleocr` | Install `-e '.[ocr]'`; also install and verify **GPU PaddlePaddle** separately. |
+| `scoring_failed` after 400 completed predictions | The GPU inference succeeded but the official evaluator failed. Inspect `runs/<run-uuid>/scoring.log`; install missing evaluation dependencies. **Do not rerun model inference.** Resubmit the CPU collector for the existing batch, as shown below. |
 | OCR + LM reports missing `ocr/paddleocr/index.json` | Inspect the shared OCR job log first; the missing cache is usually a downstream symptom of an OCR failure. |
 | GPU check shows `False` or CUDA errors | Inspect `nvidia-smi`, the SLURM node allocation, CUDA wheel compatibility, and the full job log; do not blindly reinstall. |
 | `gpu-check-<id>.out` missing | Check `squeue` and `scontrol show job <id>`; SLURM may not have started the job yet. |

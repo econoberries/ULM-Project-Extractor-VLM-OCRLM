@@ -62,13 +62,35 @@ def run_summary(batch, spec):
         meta = read_json(meta_path)
         row["gpu_name"] = ", ".join(meta.get("gpu_names", [])) or None
         row["model_load_time_s"] = meta.get("model_load_time_s")
-    if state.get("status") == "completed" and len(successful) == 400 and len(predicted) == 400:
+    # A completed or previously failed scoring job can be reevaluated with the
+    # same saved predictions, without rerunning GPU inference or changing UUIDs.
+    if state.get("status") in {"completed", "scoring_failed", "scored"} and len(successful) == 400 and len(predicted) == 400:
         try:
             scored_path = run_dir / "predictions_scored.json"
-            subprocess.run([
+            command = [
                 sys.executable, batch["evaluator"], "--input_path", str(path),
                 "--output_path", str(scored_path)
-            ], check=True, capture_output=True, text=True)
+            ]
+            try:
+                scorer = subprocess.run(command, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as exc:
+                # Preserve the root cause from the official evaluator, not just
+                # the subprocess exit code, which hides missing dependencies.
+                log = run_dir / "scoring.log"
+                log.write_text(
+                    "Official OCRBench evaluator failed\\n"
+                    + "Command: " + " ".join(command) + "\\n"
+                    + "Exit status: " + str(exc.returncode) + "\\n"
+                    + "STDOUT:\\n" + str(exc.stdout or "") + "\\n"
+                    + "STDERR:\\n" + str(exc.stderr or "") + "\\n",
+                    encoding="utf-8",
+                )
+                detail = (exc.stderr or exc.stdout or "").strip().splitlines()
+                last_line = detail[-1] if detail else "No evaluator traceback was captured"
+                raise RuntimeError(
+                    f"Official OCRBench evaluator exited {exc.returncode}: {last_line}. "
+                    f"Full traceback: {log}"
+                ) from exc
             scored = read_json(scored_path)
             if len(scored) != 400 or any(not isinstance(r.get("score"), (int, float)) for r in scored):
                 raise ValueError("Official evaluator did not provide 400 numeric scores")

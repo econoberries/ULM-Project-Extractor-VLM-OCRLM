@@ -94,6 +94,53 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(read_json(self.base / "runs" / batch["runs"][0]["run_id"] / "run.json")["status"],
                          "submitted")
 
+    def test_collector_retries_failed_scoring_without_gpu(self):
+        import subprocess
+        data = load_documents(self.images)
+        with patch("ulm_extractor.scheduler._sbatch", side_effect=["201", "202", "203", "204"]):
+            submission = submit_batch(data, load_config(self.yml), self.scheduler_args())
+        batch = read_json(submission["batch_path"])
+        experiment = batch["runs"][0]
+        run_dir = self.base / "runs" / experiment["run_id"]
+        status_path = run_dir / "run.json"
+        status = read_json(status_path)
+        status["status"] = "scoring_failed"
+        write_json(status_path, status)
+        predictions = [{**record, "predict": '{"field": "value"}',
+                        "inference_seconds": 1.0, "lm_seconds": 1.0,
+                        "ocr_seconds": None, "output_tokens": 15,
+                        "hit_token_limit": False,
+                        "peak_allocated_gpu_bytes": [1024**3]}
+                       for record in self.original]
+        write_json(run_dir / "predictions.json", predictions)
+        other = batch["runs"][1]
+        other_status = read_json(self.base / "runs" / other["run_id"] / "run.json")
+        other_status["status"] = "failed"
+        write_json(self.base / "runs" / other["run_id"] / "run.json", other_status)
+
+        def fake_failure(command, **kwargs):
+            raise subprocess.CalledProcessError(
+                1, command, output="checking dependencies", stderr="ModuleNotFoundError: No module named 'distance'"
+            )
+        with patch("ulm_extractor.aggregate.subprocess.run", side_effect=fake_failure):
+            collect(batch)
+        self.assertIn("ModuleNotFoundError",
+                      (run_dir / "scoring.log").read_text(encoding="utf-8"))
+        self.assertEqual(read_json(status_path)["status"], "scoring_failed")
+
+        def fake_success(command, **kwargs):
+            out = command[command.index("--output_path") + 1]
+            source = read_json(command[command.index("--input_path") + 1])
+            write_json(out, [{**r, "score": 0.75} for r in source])
+        with patch("ulm_extractor.aggregate.subprocess.run", side_effect=fake_success):
+            csvpath = collect(batch)
+        import pandas as pd
+        row = pd.read_csv(csvpath).iloc[0]
+        self.assertEqual(row["status"], "scored")
+        self.assertAlmostEqual(row["official_kie_f1"], 0.75)
+        self.assertEqual(read_json(status_path)["status"], "scored")
+        self.assertEqual(len(read_json(run_dir / "predictions.json")), 400)
+
     def test_dry_run_does_not_write_or_submit(self):
         data = load_documents(self.images)
         with patch("ulm_extractor.scheduler.subprocess.run", side_effect=AssertionError("sbatch called")):
