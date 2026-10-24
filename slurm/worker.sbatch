@@ -1,11 +1,29 @@
 #!/usr/bin/env bash
-# Generic GPU worker; resource settings are supplied by scheduler.py
+# SLURM GPU worker. PaddleOCR and PyTorch use isolated Python environments:
+#   ocr -> .venv-ocr (PaddlePaddle GPU)
+#   run -> .venv     (PyTorch VLM / OCR+LM)
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
-if [[ ! -x .venv/bin/python ]]; then
-  echo "Missing .venv/bin/python; install the Python environment in this repository." >&2
+
+if [[ $# -lt 1 ]]; then
+  echo "Missing worker action: expected ocr or run." >&2
   exit 2
 fi
+
+case "$1" in
+  ocr) python_bin=".venv-ocr/bin/python" ;;
+  run) python_bin=".venv/bin/python" ;;
+  *)
+    echo "Unsupported GPU worker action '$1'; expected ocr or run." >&2
+    exit 2
+    ;;
+esac
+
+if [[ ! -x "$python_bin" ]]; then
+  echo "Missing $python_bin. Follow README's separate-environment installation." >&2
+  exit 2
+fi
+
 if ! command -v nvidia-smi >/dev/null; then
   echo "GPU job has no nvidia-smi" >&2
   exit 2
@@ -16,5 +34,7 @@ if [[ "$gpu_name" != *"$EXTRACTOR_EXPECT_GPU"* ]]; then
   echo "Wrong GPU: expected $EXTRACTOR_EXPECT_GPU, got $gpu_name" >&2
   exit 2
 fi
+
 export TOKENIZERS_PARALLELISM=false
-exec .venv/bin/python -m ulm_extractor.worker "$@"
+echo "SLURM worker action: $1; Python: $python_bin"
+exec "$python_bin" -m ulm_extractor.worker "$@"

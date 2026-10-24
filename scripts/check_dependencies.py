@@ -1,15 +1,20 @@
-"""Fast login-node dependency check; it does NOT test GPU execution.
+"""Validate separately installed Helix environments without using a GPU.
 
-Usage:
-  .venv/bin/python scripts/check_dependencies.py --stage all
+Examples:
   .venv/bin/python scripts/check_dependencies.py --stage vlm
-  .venv/bin/python scripts/check_dependencies.py --stage ocr
+  .venv-ocr/bin/python scripts/check_dependencies.py --stage ocr
+  .venv/bin/python scripts/check_dependencies.py --stage all
+
+"all" checks .venv for Torch and delegates OCR checks to .venv-ocr.
 """
 from argparse import ArgumentParser
 from importlib.metadata import PackageNotFoundError, version
 import importlib.util
+from pathlib import Path
+import subprocess
 import sys
 
+ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
     "base": ("ulm-extractor", "PyYAML", "pandas"),
     "vlm": ("torch", "torchvision", "transformers", "accelerate", "Pillow"),
@@ -22,68 +27,103 @@ HELIX_EXPECTED = {
     "paddleocr": "3.7.0",
     "paddlex": "3.7.2",
 }
+# Shared runtime libraries that the user's Paddle install downgraded.
+TORCH_LIBRARIES = {
+    "nvidia-cudnn-cu13": "9.24.0.43",
+    "nvidia-nccl-cu13": "2.30.7",
+}
+
+
+def _installed(name):
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
 
 def check(stage="all"):
+    if stage == "all":
+        main_python = ROOT / ".venv" / "bin" / "python"
+        ocr_python = ROOT / ".venv-ocr" / "bin" / "python"
+        if not main_python.is_file() or not ocr_python.is_file():
+            print("Missing .venv or .venv-ocr; see README installation instructions")
+            return 1
+        for env, step in ((main_python, "vlm"), (ocr_python, "ocr")):
+            print(f"\nChecking {env.name} in {env.parent.parent.name}: {step}", flush=True)
+            result = subprocess.run([str(env), str(Path(__file__).resolve()), "--stage", step])
+            if result.returncode:
+                return 1
+        return 0
+
     if sys.version_info[:2] != (3, 12):
         print(f"ERROR: Python 3.12 required; using {sys.version.split()[0]}")
         return 1
-    requested = ("base", "vlm", "ocr") if stage == "all" else ("base", stage)
-    missing = []
-    mismatch = []
-    seen = set()
-    for group in requested:
-        for dist in REQUIRED[group]:
-            if dist in seen:
-                continue
-            seen.add(dist)
-            try:
-                installed = version(dist)
-            except PackageNotFoundError:
-                print(f"MISSING  {dist}")
-                missing.append(dist)
-                continue
-            expected = HELIX_EXPECTED.get(dist)
-            if expected and installed != expected:
-                print(f"CHECK    {dist} {installed} (Helix CUDA 13.0 recipe expects {expected})")
-                mismatch.append(dist)
-            else:
-                print(f"OK       {dist} {installed}")
-    if "ocr" in requested:
-        # PaddleOCR and PaddleX are NOT the PaddlePaddle execution backend.
-        # Check the Python import, not only the package distribution name.
-        try:
-            cpu_version = version("paddlepaddle")
-        except PackageNotFoundError:
-            cpu_version = None
-        if cpu_version:
-            print(f"CONFLICT paddlepaddle {cpu_version}: CPU and GPU distributions must not coexist")
-            mismatch.append("paddlepaddle")
+    is_ocr = stage == "ocr"
+    expected_env = ".venv-ocr" if is_ocr else ".venv"
+    if Path(sys.prefix).name != expected_env:
+        print(f"ERROR: {stage} checks must run in {expected_env}, got {sys.prefix}")
+        return 1
+
+    required = list(REQUIRED["base"])
+    if stage in {"vlm", "ocr"}:
+        required += REQUIRED[stage]
+    problems = []
+    for dist in required:
+        installed = _installed(dist)
+        if installed is None:
+            print(f"MISSING  {dist}")
+            problems.append(dist)
+            continue
+        expected = HELIX_EXPECTED.get(dist)
+        if expected and installed != expected:
+            print(f"CHECK    {dist} {installed} (expected {expected})")
+            problems.append(dist)
+        else:
+            print(f"OK       {dist} {installed}")
+
+    if is_ocr:
+        if _installed("paddlepaddle"):
+            print("CONFLICT CPU-only paddlepaddle must not coexist with paddlepaddle-gpu")
+            problems.append("paddlepaddle")
+        if _installed("torch"):
+            print("CONFLICT torch installed in the PaddleOCR virtual environment")
+            problems.append("torch")
         if importlib.util.find_spec("paddle") is None:
             print("MISSING  Python module 'paddle' (install paddlepaddle-gpu)")
-            missing.append("paddle")
+            problems.append("paddle")
         else:
             try:
                 import paddle
                 gpu_build = bool(paddle.is_compiled_with_cuda())
                 print(f"OK       import paddle {paddle.__version__}; CUDA build: {gpu_build}")
                 if not gpu_build:
-                    print("ERROR    PaddlePaddle is not compiled with CUDA")
-                    mismatch.append("paddle CUDA")
+                    problems.append("paddle CUDA")
             except Exception as exc:
                 print(f"ERROR    import paddle: {type(exc).__name__}: {exc}")
-                mismatch.append("paddle import")
-    if missing or mismatch:
-        print("\nEnvironment not ready for the selected Helix profile.")
-        print("See README installation steps; do not submit the full benchmark yet.")
+                problems.append("paddle import")
+    else:
+        if _installed("paddlepaddle-gpu"):
+            print("CONFLICT paddlepaddle-gpu installed in PyTorch environment")
+            problems.append("paddlepaddle-gpu")
+        if stage == "vlm":
+            for dist, expected in TORCH_LIBRARIES.items():
+                actual = _installed(dist)
+                if actual != expected:
+                    print(f"CHECK    {dist} {actual} (PyTorch requires {expected})")
+                    problems.append(dist)
+
+    if problems:
+        print("\nEnvironment is NOT ready. Check the install steps; do not resume yet.")
         return 1
-    print("\nInstalled-package check passed. This does NOT prove GPU access.")
-    print("Next: submit the Torch/Paddle/PaddleOCR SLURM GPU smoke tests.")
+    print(f"\n{expected_env} dependency check PASSED. Run GPU smoke tests next.")
     return 0
 
+
 def main(argv=None):
-    parser = ArgumentParser(description="Check Helix CUDA 13.0 package dependencies without GPU")
+    parser = ArgumentParser(description="Verify separate Helix PyTorch/Paddle environments")
     parser.add_argument("--stage", choices=("base", "vlm", "ocr", "all"), default="all")
     return check(parser.parse_args(argv).stage)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

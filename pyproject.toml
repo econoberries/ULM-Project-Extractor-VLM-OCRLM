@@ -10,8 +10,9 @@ requires-python = ">=3.12,<3.13"
 dependencies = ["PyYAML>=6.0,<7", "pandas>=2.0,<3"]
 
 # CUDA-specific wheels are installed separately using requirements/helix-*.txt.
-# Keep this file portable: PaddlePaddle GPU is an environment dependency,
-# while PaddleOCR and torchvision are declared as actual pipeline dependencies.
+# Use separate virtual environments: .venv installs [vlm] for all LM workers,
+# .venv-ocr installs [ocr] and PaddlePaddle GPU for the shared OCR worker.
+# Never combine [vlm,ocr] with paddlepaddle-gpu in one environment.
 [project.optional-dependencies]
 vlm = [
     "torch>=2.14.1,<2.15",

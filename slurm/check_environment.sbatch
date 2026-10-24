@@ -9,53 +9,58 @@
 #SBATCH --time=00:20:00
 #SBATCH --output=gpu-check-%j.out
 
-# Submit from the repository root:
-#   sbatch slurm/check_environment.sbatch torch
-#   sbatch slurm/check_environment.sbatch paddle
+# From repository root:
+#   sbatch slurm/check_environment.sbatch torch    # .venv (PyTorch)
+#   sbatch slurm/check_environment.sbatch paddle   # .venv-ocr (PaddlePaddle)
 #   sbatch slurm/check_environment.sbatch ocr /path/to/image.jpg
-# Optional ONE-document model test:
+# Optional:
 #   sbatch --mem=64G --time=00:45:00 slurm/check_environment.sbatch model /path/to/EN_part qwen35_vlm
 
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
-
-if [[ ! -x .venv/bin/python ]]; then
-  echo "ERROR: .venv/bin/python missing. Create the Python 3.12 venv first." >&2
+if [[ $# -lt 1 ]]; then
+  echo "Usage: sbatch slurm/check_environment.sbatch {torch|paddle|ocr IMAGE|model EN_PART [EXPERIMENT_ID]}" >&2
   exit 2
 fi
 
-if [[ $# -lt 1 ]]; then
-  echo "Usage: sbatch slurm/check_environment.sbatch {torch|paddle|ocr IMAGE|model EN_PART [EXPERIMENT_ID]}" >&2
+case "$1" in
+  paddle|ocr) python_bin=".venv-ocr/bin/python" ;;
+  torch|model) python_bin=".venv/bin/python" ;;
+  *) echo "Unknown GPU test '$1'." >&2; exit 2 ;;
+esac
+if [[ ! -x "$python_bin" ]]; then
+  echo "Missing $python_bin. Install the matching environment before testing." >&2
   exit 2
 fi
 
 echo "SLURM job: $SLURM_JOB_ID"
 echo "Compute node: $(hostname)"
 echo "Repository: $(pwd)"
-echo "Virtualenv Python: $(.venv/bin/python --version)"
+echo "Python environment: $python_bin ($("$python_bin" --version))"
+
 if ! command -v nvidia-smi >/dev/null 2>&1; then
-  echo "ERROR: nvidia-smi not found on the allocated GPU node." >&2
+  echo "nvidia-smi not found on the allocated GPU node." >&2
   exit 2
 fi
 nvidia-smi
 if ! nvidia-smi --query-gpu=name --format=csv,noheader | grep -qi A100; then
-  echo "ERROR: Requested A100, but no A100 GPU was reported." >&2
+  echo "Requested A100, but no A100 GPU was reported." >&2
   exit 2
 fi
 
 case "$1" in
   torch)
-    exec .venv/bin/python scripts/check_torch_cuda.py
+    exec "$python_bin" scripts/check_torch_cuda.py
     ;;
   paddle)
-    exec .venv/bin/python scripts/check_paddle_cuda.py
+    exec "$python_bin" scripts/check_paddle_cuda.py
     ;;
   ocr)
     if [[ $# -ne 2 ]]; then
       echo "Usage: sbatch slurm/check_environment.sbatch ocr /absolute/path/to/image.jpg" >&2
       exit 2
     fi
-    exec .venv/bin/python scripts/check_paddleocr.py --image "$2"
+    exec "$python_bin" scripts/check_paddleocr.py --image "$2"
     ;;
   model)
     if [[ $# -lt 2 || $# -gt 3 ]]; then
@@ -63,12 +68,8 @@ case "$1" in
       exit 2
     fi
     if [[ $# -eq 3 ]]; then
-      exec .venv/bin/python scripts/check_model_inference.py --input "$2" --experiment-id "$3"
+      exec "$python_bin" scripts/check_model_inference.py --input "$2" --experiment-id "$3"
     fi
-    exec .venv/bin/python scripts/check_model_inference.py --input "$2"
-    ;;
-  *)
-    echo "ERROR: Unknown test '$1'. Choose torch, paddle, ocr or model." >&2
-    exit 2
+    exec "$python_bin" scripts/check_model_inference.py --input "$2"
     ;;
 esac

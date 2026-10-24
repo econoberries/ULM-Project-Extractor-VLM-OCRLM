@@ -43,6 +43,19 @@ class HelixEnvironmentContract(unittest.TestCase):
         ast.parse(source)
         self.assertIn('find_spec("paddle")', source)
         self.assertIn("paddle.is_compiled_with_cuda()", source)
+        self.assertIn("nvidia-cudnn-cu13", source)
+        self.assertIn("nvidia-nccl-cu13", source)
+        self.assertIn(".venv-ocr", source)
+
+    def test_gpu_workers_use_disjoint_environments(self):
+        worker = (ROOT / "slurm" / "worker.sbatch").read_text(encoding="utf-8")
+        smoke = (ROOT / "slurm" / "check_environment.sbatch").read_text(encoding="utf-8")
+        self.assertIn('ocr) python_bin=".venv-ocr/bin/python"', worker)
+        self.assertIn('run) python_bin=".venv/bin/python"', worker)
+        self.assertIn('paddle|ocr) python_bin=".venv-ocr/bin/python"', smoke)
+        self.assertIn('torch|model) python_bin=".venv/bin/python"', smoke)
+        self.assertIn(".venv-ocr", (ROOT / "src" / "ulm_extractor" / "resume.py").read_text())
+        self.assertIn(".venv-ocr", (ROOT / "requirements" / "helix-paddle-cu130.txt").read_text())
 
 if __name__ == "__main__":
     unittest.main()

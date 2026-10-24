@@ -2,8 +2,8 @@
 
 Use --ocr-only to guarantee NO direct VLM GPU jobs are submitted.
 """
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+import subprocess
 from uuid import uuid4
 
 from .scheduler import ROOT, _sbatch
@@ -39,10 +39,21 @@ def _ocr_cache_complete(batch, documents):
     index = read_json(index_path)
     if index.get("manifest_sha256") != batch["manifest_sha256"]:
         raise ValueError("Existing PaddleOCR cache has a different dataset manifest")
+    # The resume CLI runs from .venv (PyTorch), but the OCR model runs
+    # exclusively from .venv-ocr. Check the *correct* PaddleOCR installation.
+    ocr_python = ROOT / ".venv-ocr" / "bin" / "python"
+    if not ocr_python.is_file():
+        raise ValueError("Missing .venv-ocr/bin/python; create OCR environment first")
     try:
-        installed_version = version("paddleocr")
-    except PackageNotFoundError as exc:
-        raise ValueError("Install PaddleOCR in the project environment before resuming") from exc
+        proc = subprocess.run([
+            str(ocr_python), "-c",
+            "from importlib.metadata import version; print(version('paddleocr'))"
+        ], capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(
+            f"Cannot inspect PaddleOCR in .venv-ocr: {exc.stderr}"
+        ) from exc
+    installed_version = proc.stdout.strip()
     if index.get("paddleocr_version") != installed_version:
         raise ValueError("Existing PaddleOCR cache uses a different PaddleOCR version")
     records = index.get("records")

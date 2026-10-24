@@ -1,6 +1,5 @@
-# Validated availability: official PyTorch CUDA 13.0 wheel index (Linux x86_64 / Python 3.12).
-# Install these together BEFORE installing the extractor's [vlm] extra.
-# Exact local-version pins avoid silently using CPU/CUDA 12.x packages.
+# PyTorch CUDA 13.0 profile for .venv (VLM and OCR->LM workers).
+# NEVER install PaddlePaddle GPU into this same environment.
 --extra-index-url https://download.pytorch.org/whl/cu130
 torch==2.14.1+cu130
 torchvision==0.29.1+cu130
