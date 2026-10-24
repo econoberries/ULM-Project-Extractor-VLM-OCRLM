@@ -232,9 +232,11 @@ class ContractTests(unittest.TestCase):
         def fake_sbatch(command, dry):
             jobs.append(command)
             return str(900 + len(jobs))
-        with patch("ulm_extractor.resume.ROOT", fake_root), \\
-             patch("ulm_extractor.resume.subprocess.run", return_value=Mock(stdout="3.7.0\\n")), \\
-             patch("ulm_extractor.resume._sbatch", side_effect=fake_sbatch):
+        with (
+            patch("ulm_extractor.resume.ROOT", fake_root),
+            patch("ulm_extractor.resume.subprocess.run", return_value=Mock(stdout="3.7.0\n")),
+            patch("ulm_extractor.resume._sbatch", side_effect=fake_sbatch),
+        ):
             resume_batch(submission["batch_path"], opts)
         self.assertEqual(len(jobs), 2)  # OCR-LM + CPU collector, no shared OCR
         self.assertFalse(any("ulm-ocr-resume" in command for command in jobs))
