@@ -42,37 +42,89 @@ All entries require `id`, `pipeline`, `adapter`, and `checkpoint`; OCR→LM addi
 
 The extractor adds **no output-formatting prompt**. It preserves raw generation strings and counts token-limit hits, without automatic truncation retries. Current primary profile uses greedy, batch-one inference.
 
-## Installing on Helix
+## Installing on Helix (without `uv`)
 
-Run these **inside your Helix SSH session**, from your home directory:
+The Helix login node may not have `uv` installed. **This project does not require `uv`**: use Python 3.12's built-in `venv` module and `pip` instead.
+
+Run these commands **inside your Helix SSH session**. For an initial checkout:
 
 ```bash
+cd ~
 git clone https://github.com/econoberries/ULM-Project-Extractor-VLM-OCRLM.git
 cd ULM-Project-Extractor-VLM-OCRLM
 ```
 
-**Do not use Helix's system `python3` if it resolves to Python 3.6.** This project requires Python 3.12 for our intended GPU environment. With `uv` available, initialize a project-local interpreter:
+If the new repository is already cloned, **do not clone again**; instead run:
 
 ```bash
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e .
+cd ~/ULM-Project-Extractor-VLM-OCRLM
+git pull --ff-only origin main
+```
+
+### Step 1 — Confirm Python 3.12
+
+In the Helix setup we verified both of these commands:
+
+```bash
+~/ULM-VLM-OCR-IE/.venv/bin/python --version  # Python 3.12.12 from the previous project
+command -v python3.12                        # /usr/bin/python3.12
+```
+
+**Use `/usr/bin/python3.12` for the new environment.** Do not rely on bare `python3` (which previously resolved to Python 3.6) or install into the old project's `.venv`.
+
+### Step 2 — Create and verify a fresh environment
+
+From `~/ULM-Project-Extractor-VLM-OCRLM`:
+
+```bash
+/usr/bin/python3.12 -m venv .venv
+.venv/bin/python --version
+.venv/bin/python -m pip --version
+```
+
+The Python version should be 3.12, and the pip command should display its installed version. If either check fails, **fix the environment before proceeding**. This environment is local to the new repository; it does not change `~/ULM-VLM-OCR-IE/.venv`.
+
+### Step 3 — Install the lightweight extractor and run offline tests
+
+```bash
+.venv/bin/python -m pip install -e .
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/extractor --help
 ```
 
-Install and verify the appropriate **CUDA PyTorch, Transformers, Pillow and Accelerate** versions for the GPU model adapters. The previous Qwen3.5 experiment used Python 3.12.12, PyTorch 2.14.1+cu126 and Transformers 5.19.0; these versions are good starting reference points, **not proof that this new combined environment has been tested**. The `[vlm]` extra declares model dependencies:
+The base installation provides the benchmark config loader, dataset validator, SLURM orchestrator, and CPU collector. These checks do not require a GPU or submit SLURM jobs.
+
+### Step 4 — Install GPU dependencies before actual inference
+
+For the VLM/LM adapters, install the extra dependencies into the **same new environment**:
 
 ```bash
-uv pip install --python .venv/bin/python -e '.[vlm]'
+.venv/bin/python -m pip install -e '.[vlm]'
 ```
 
-For OCR stages, install a cluster-compatible `paddlepaddle-gpu` and `paddleocr`, validate PaddlePaddle sees CUDA, and record their versions. PaddlePaddle's CUDA build is installation-specific and is **not pinned by the lightweight package**. The official evaluator also needs its own dependencies:
+**Verify CUDA PyTorch compatibility on a GPU compute node before submitting full jobs.** The historical Qwen3.5 experiment used Python 3.12.12, PyTorch 2.14.1+cu126 and Transformers 5.19.0, but this **new environment and its model adapters have not yet been GPU-validated**. A default pip installation is not proof that the right CUDA wheel was selected.
+
+For OCR stages, separately install and verify a cluster-compatible `paddlepaddle-gpu` and `paddleocr`. Their CUDA compatibility must be checked on Helix; a verified GPU PaddlePaddle build is not currently pinned by the base package.
+
+The official evaluator needs its checkout and dependencies. If `~/MultimodalOCR` already exists, **reuse it** rather than cloning again:
 
 ```bash
+# Only if the official evaluator repository is not already present:
 git clone https://github.com/Yuliang-Liu/MultimodalOCR.git ~/MultimodalOCR
-uv pip install --python .venv/bin/python -r ~/MultimodalOCR/OCRBench_v2/requirements.txt
+
+.venv/bin/python -m pip install -r ~/MultimodalOCR/OCRBench_v2/requirements.txt
 ```
 
-If you already have `~/MultimodalOCR`, reuse the checkout instead of cloning it. For reproducible comparisons, pin the evaluator commit (earlier project reference: `4e363b3f499811b43d792ef0bb33932ef05eca27`). In particular, verify dependency compatibility before submitting GPU work.
+For reproducible comparisons, use the same evaluator commit across runs (earlier reference: `4e363b3f499811b43d792ef0bb33932ef05eca27`). Check dependency compatibility after installing the evaluator's requirements.
+
+### Troubleshooting the initial Helix setup
+
+| Symptom | Explanation and next action |
+| --- | --- |
+| `-bash: uv: command not found` | `uv` is not available; the documented installation uses `/usr/bin/python3.12 -m venv` and `python -m pip` instead. |
+| `.venv/bin/python: No such file or directory` | The environment has not been created successfully. Run Step 2 from the repository root, then verify its Python and pip. |
+| `python3 --version` shows Python 3.6 | Do not use that interpreter for this project; explicitly use `/usr/bin/python3.12` when creating the environment. |
+| `No module named pip` inside `.venv` | Stop before installing packages; verify that the system's Python 3.12 provides `venv`/`ensurepip` or use an available cluster-supported Python 3.12 module. Avoid installing packages globally. |
 
 ## Run a dry-run first (no SLURM jobs)
 
