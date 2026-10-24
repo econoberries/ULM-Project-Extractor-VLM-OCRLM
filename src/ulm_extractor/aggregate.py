@@ -72,7 +72,15 @@ def run_summary(batch, spec):
                 "--output_path", str(scored_path)
             ]
             try:
-                scorer = subprocess.run(command, check=True, capture_output=True, text=True)
+                if state.get("status") == "scored" and scored_path.is_file():
+                    saved = read_json(scored_path)
+                    if (isinstance(saved, list) and len(saved) == 400
+                            and all(isinstance(r.get("score"), (int, float)) for r in saved)):
+                        print(f"Reusing saved official scores for {spec['id']}", flush=True)
+                    else:
+                        subprocess.run(command, check=True, capture_output=True, text=True)
+                else:
+                    subprocess.run(command, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as exc:
                 # Preserve the root cause from the official evaluator, not just
                 # the subprocess exit code, which hides missing dependencies.

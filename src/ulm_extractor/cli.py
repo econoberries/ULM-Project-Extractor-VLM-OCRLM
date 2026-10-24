@@ -7,6 +7,7 @@ import sys
 from .config import load_config
 from .dataset import load_documents
 from .scheduler import ROOT, submit_batch
+from .resume import resume_batch
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="extractor")
@@ -26,7 +27,29 @@ def main(argv=None):
     p.add_argument("--mem", default="64G")
     p.add_argument("--time", default="02:00:00")
     p.add_argument("--dry-run", action="store_true", help="Validate and print jobs without writing or submitting")
+    r = sub.add_parser("resume", help="Resume failed runs in an existing batch without new IDs")
+    r.add_argument("--batch", type=Path, required=True,
+                   help="Existing runs/batches/<batch-id>/batch.json")
+    r.add_argument("--ocr-only", action="store_true",
+                   help="Never submit a direct VLM; retry only OCR and OCR+LM")
+    r.add_argument("--partition", default="gpu-single")
+    r.add_argument("--collector-partition", default="cpu-single")
+    r.add_argument("--gres", default="gpu:A100:1")
+    r.add_argument("--cpus", type=int, default=4)
+    r.add_argument("--mem", default="64G")
+    r.add_argument("--time", default="02:00:00")
+    r.add_argument("--dry-run", action="store_true",
+                   help="Print planned SLURM jobs without submitting or writing files")
     args = parser.parse_args(argv)
+    if args.action == "resume":
+        try:
+            if args.cpus < 1:
+                raise ValueError("--cpus must be positive")
+            resume_batch(args.batch, args)
+            return 0
+        except (OSError, ValueError, subprocess.CalledProcessError, KeyError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
     if args.action == "benchmark":
         try:
             if args.cpus < 1:

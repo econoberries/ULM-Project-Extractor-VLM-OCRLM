@@ -9,6 +9,7 @@ from unittest.mock import patch
 from ulm_extractor.config import load_config
 from ulm_extractor.dataset import load_documents
 from ulm_extractor.scheduler import submit_batch
+from ulm_extractor.resume import resume_batch
 from ulm_extractor.aggregate import collect
 from ulm_extractor.storage import read_json, write_json
 
@@ -148,6 +149,90 @@ class ContractTests(unittest.TestCase):
             result = submit_batch(data, load_config(self.yml), self.scheduler_args(True))
         self.assertFalse((self.base / "runs").exists())
         self.assertEqual(result["jobs"]["collector"], "DRY_RUN")
+
+    def test_resume_only_ocr_keeps_existing_vlm_and_ids(self):
+        data = load_documents(self.images)
+        with patch("ulm_extractor.scheduler._sbatch", side_effect=["301", "302", "303", "304"]):
+            submission = submit_batch(data, load_config(self.yml), self.scheduler_args())
+        batch_path = Path(submission["batch_path"])
+        original_spec = batch_path.read_bytes()
+        batch = read_json(batch_path)
+        vlm, ocr_lm = batch["runs"]
+        vlm_dir = self.base / "runs" / vlm["run_id"]
+        vlm_state = read_json(vlm_dir / "run.json")
+        vlm_state["status"] = "scored"
+        write_json(vlm_dir / "run.json", vlm_state)
+        preds = [{**rec, "predict": '{"field": "value"}', "inference_seconds": 0.1,
+                  "lm_seconds": 0.1} for rec in self.original]
+        write_json(vlm_dir / "predictions.json", preds)
+        write_json(vlm_dir / "predictions_scored.json",
+                   [{**rec, "score": 0.8} for rec in preds])
+        lm_dir = self.base / "runs" / ocr_lm["run_id"]
+        lm_state = read_json(lm_dir / "run.json")
+        lm_state["status"] = "failed"
+        write_json(lm_dir / "run.json", lm_state)
+
+        opts = argparse.Namespace(ocr_only=True, dry_run=False, partition="gpu-single",
+                                  collector_partition="cpu-single", gres="gpu:A100:1",
+                                  cpus=4, mem="64G", time="02:00:00")
+        commands = []
+        def fake_sbatch(command, dry_run):
+            commands.append(command)
+            return str(700 + len(commands))
+        with patch("ulm_extractor.resume._sbatch", side_effect=fake_sbatch):
+            result = resume_batch(batch_path, opts)
+        self.assertEqual(len(commands), 3)  # shared OCR, OCR+LM, collector
+        self.assertTrue(any("ulm-ocr-resume" in cmd for cmd in commands))
+        self.assertTrue(any(ocr_lm["run_id"] in cmd for cmd in commands))
+        self.assertFalse(any(vlm["run_id"] in cmd for cmd in commands))
+        self.assertIn("afterany:701", commands[1])
+        self.assertIn("afterany:701:702", commands[2])
+        self.assertEqual(batch_path.read_bytes(), original_spec)
+        self.assertEqual(read_json(vlm_dir / "run.json")["status"], "scored")
+        self.assertEqual(len(read_json(vlm_dir / "predictions.json")), 400)
+        self.assertEqual(result["batch_id"], batch["batch_id"])
+        self.assertEqual(len(list((batch_path.parent / "resumes").glob("*.json"))), 1)
+
+    def test_resume_dry_run_does_not_write_anything(self):
+        data = load_documents(self.images)
+        with patch("ulm_extractor.scheduler._sbatch", side_effect=["401", "402", "403", "404"]):
+            submission = submit_batch(data, load_config(self.yml), self.scheduler_args())
+        path = Path(submission["batch_path"])
+        batch = read_json(path)
+        for m in batch["runs"]:
+            statpath = self.base / "runs" / m["run_id"] / "run.json"
+            state = read_json(statpath)
+            state["status"] = "failed"
+            write_json(statpath, state)
+        old = (path.read_bytes(), (path.parent / "jobs.json").read_bytes())
+        opts = argparse.Namespace(ocr_only=True, dry_run=True, partition="gpu-single",
+                                  collector_partition="cpu-single", gres="gpu:A100:1",
+                                  cpus=4, mem="64G", time="02:00:00")
+        with patch("ulm_extractor.resume._sbatch", return_value="DRY_RUN") as fake:
+            result = resume_batch(path, opts)
+        self.assertEqual(len(fake.call_args_list), 3)
+        self.assertEqual(result["batch_id"], batch["batch_id"])
+        self.assertEqual(old, (path.read_bytes(), (path.parent / "jobs.json").read_bytes()))
+        self.assertFalse((path.parent / "resumes").exists())
+
+    def test_resume_refuses_job_still_running(self):
+        data = load_documents(self.images)
+        with patch("ulm_extractor.scheduler._sbatch", side_effect=["501", "502", "503", "504"]):
+            submission = submit_batch(data, load_config(self.yml), self.scheduler_args())
+        path = Path(submission["batch_path"])
+        spec = read_json(path)
+        ocr_spec = spec["runs"][1]
+        status_path = self.base / "runs" / ocr_spec["run_id"] / "run.json"
+        state = read_json(status_path)
+        state["status"] = "running"
+        write_json(status_path, state)
+        opts = argparse.Namespace(ocr_only=True, dry_run=True, partition="gpu-single",
+                                  collector_partition="cpu-single", gres="gpu:A100:1",
+                                  cpus=4, mem="64G", time="02:00:00")
+        with patch("ulm_extractor.resume._sbatch") as fake:
+            with self.assertRaisesRegex(ValueError, "check squeue/sacct"):
+                resume_batch(path, opts)
+        fake.assert_not_called()
 
     def test_collect_one_row_per_run(self):
         data = load_documents(self.images)

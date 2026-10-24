@@ -24,6 +24,7 @@ def run_model(batch, run_id):
         raise ValueError("Cannot resume a run with different model settings or benchmark manifest")
     current.update(status="running", started_utc=datetime.now(timezone.utc).isoformat(),
                    slurm_job_id=os.environ.get("SLURM_JOB_ID"))
+    current.pop("error", None)  # do not retain old initialization failures
     write_json(status_path, current)
     existing = {}
     if prediction_path.exists():
