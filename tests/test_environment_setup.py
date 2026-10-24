@@ -27,6 +27,15 @@ class HelixEnvironmentContract(unittest.TestCase):
             (ROOT / "pyproject.toml").read_text()
         )["project"]["optional-dependencies"]["ocr"])
 
+    def test_repair_requirements_match_pytorch(self):
+        repair = (ROOT / "requirements" / "helix-torch-repair-cu130.txt").read_text()
+        self.assertIn("nvidia-cudnn-cu13==9.24.0.43", repair)
+        self.assertIn("nvidia-nccl-cu13==2.30.7", repair)
+
+    def test_isolated_ocr_venv_is_gitignored(self):
+        ignore = (ROOT / ".gitignore").read_text()
+        self.assertIn("/.venv-ocr/", ignore)
+
     def test_kie_only_evaluator_requirements(self):
         path = ROOT / "requirements" / "ocrbench-v2-kie-eval.txt"
         packages = [line.strip().lower() for line in path.read_text().splitlines()

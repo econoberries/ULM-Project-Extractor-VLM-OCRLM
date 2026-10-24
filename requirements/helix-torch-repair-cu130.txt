@@ -1,0 +1,7 @@
+# Repair the existing PyTorch CUDA 13.0 environment after an accidental
+# paddlepaddle-gpu installation downgraded the shared NVIDIA libraries.
+# FIRST uninstall paddlepaddle-gpu from .venv; never use this in .venv-ocr.
+# These are the exact Torch 2.14.1 requirements shown by pip.
+--extra-index-url https://download.pytorch.org/whl/cu130
+nvidia-cudnn-cu13==9.24.0.43
+nvidia-nccl-cu13==2.30.7

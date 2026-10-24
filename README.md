@@ -62,15 +62,29 @@ OCRBench EN_part/ + model.yml
 
 Each model runs in its own SLURM GPU job. The two OCR + LM models share a single PaddleOCR extraction for the same batch. The CPU collector runs after the jobs finish, even if some fail, so unsuccessful runs remain visible in the summary.
 
-## Helix installation: Python 3.12 and CUDA 13.0
+## Helix installation: separate PyTorch and PaddleOCR environments
 
-This section reflects the **new extractor environment on Helix**, where Python 3.12 is available at `/usr/bin/python3.12` and the installed PyTorch reported **`2.14.1+cu130` (CUDA 13.0)**. The previous project's CUDA 12.6 environment is separate: do not copy its wheels into the new `.venv`.
+Our Helix A100 setup uses **Python 3.12** and CUDA 13.0 wheels. **Keep PyTorch and PaddlePaddle GPU in different virtual environments.** Installing `paddlepaddle-gpu==3.3.0` into the existing PyTorch `.venv` replaced NVIDIA cuDNN and NCCL packages used by `torch==2.14.1+cu130`, causing a dependency conflict.
 
-**Install packages on the login node; run GPU calculations through SLURM jobs.** The current CUDA 13.0 setup is a concrete Helix installation recipe, not a claim that the entire four-model benchmark has already passed GPU validation.
+| Environment | Install | Used for |
+| --- | --- | --- |
+| `.venv/` | PyTorch 2.14.1+cu130, Torchvision 0.29.1+cu130, Transformers, official KIE evaluator | VLM jobs, OCR + LM jobs, scoring/collector and command line |
+| `.venv-ocr/` | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.2 | Shared GPU PaddleOCR job and Paddle-specific tests |
 
-### 1. Clone or update the repository
+The shared OCR stage writes text and timing data to disk. The LM stage reads those files in a different SLURM job: **it does not import PaddlePaddle**. The scripts automatically select the correct Python interpreter depending on job type.
 
-For a fresh checkout:
+Install packages on the login node; run GPU operations through SLURM. Do not install dependencies in the older `~/ULM-VLM-OCR-IE/.venv` environment. Helix's bare `python3` might be an older version; use `/usr/bin/python3.12` to create environments.
+
+### 1. Get the latest code
+
+If you have already cloned the project:
+
+```bash
+cd ~/ULM-Project-Extractor-VLM-OCRLM
+git pull --ff-only origin main
+```
+
+For a new checkout:
 
 ```bash
 cd ~
@@ -78,96 +92,87 @@ git clone https://github.com/econoberries/ULM-Project-Extractor-VLM-OCRLM.git
 cd ULM-Project-Extractor-VLM-OCRLM
 ```
 
-If you already cloned the repository, just update it:
+### 2. Repair the existing PyTorch environment after the Paddle installation
+
+This step applies if you already installed PaddlePaddle GPU into `.venv` and saw these pip warnings:
+
+```text
+torch 2.14.1 requires nvidia-cudnn-cu13==9.24.0.43
+torch 2.14.1 requires nvidia-nccl-cu13==2.30.7
+```
+
+**Do not delete `runs/`, recreate the benchmark, or reinstall all model weights.** The correction below changes only the Python packages in `.venv`:
 
 ```bash
 cd ~/ULM-Project-Extractor-VLM-OCRLM
-git pull --ff-only origin main
+
+# Remove Paddle packages from the PyTorch environment.
+.venv/bin/python -m pip uninstall -y paddlepaddle-gpu paddleocr paddlex
+
+# Restore the two versions required by the already-installed PyTorch.
+.venv/bin/python -m pip install -r requirements/helix-torch-repair-cu130.txt
+
+# Ensure the extractor and VLM dependencies are still installed.
+.venv/bin/python -m pip install -e '.[vlm]'
+
+# Check that the entire PyTorch environment is consistent.
+.venv/bin/python -m pip check
+.venv/bin/python scripts/check_dependencies.py --stage vlm
 ```
 
-### 2. Create the virtual environment
+If `pip check` reports any other conflicts, **stop and examine its full output** rather than repeatedly installing frameworks on top of each other. If `.venv` does not exist yet, create it with `/usr/bin/python3.12 -m venv .venv` and install `requirements/helix-pytorch-cu130.txt` followed by `-e '.[vlm]'`; the repair-only file is unnecessary in a fresh environment.
 
-Only create `.venv` if it does not already exist:
+### 3. Create the separate PaddleOCR environment
+
+Do not install PaddlePaddle GPU in `.venv`. Instead:
 
 ```bash
-test -x .venv/bin/python || /usr/bin/python3.12 -m venv .venv
+cd ~/ULM-Project-Extractor-VLM-OCRLM
 
-.venv/bin/python --version
-.venv/bin/python -m pip --version
-.venv/bin/python -m pip install -e .
+# Create only if it doesn't already exist.
+test -x .venv-ocr/bin/python || /usr/bin/python3.12 -m venv .venv-ocr
+
+# PaddleOCR + PaddleX; installs the extractor code but no Torch extra.
+.venv-ocr/bin/python -m pip install -e '.[ocr]'
+
+# Download/install CUDA 13.0 PaddlePaddle GPU INTO .venv-ocr only.
+.venv-ocr/bin/python -m pip install -r requirements/helix-paddle-cu130.txt
+
+.venv-ocr/bin/python -m pip check
+.venv-ocr/bin/python scripts/check_dependencies.py --stage ocr
 ```
 
-Use `.venv/bin/python -m pip` for all installations. Do not rely on the default `python3`, and do not install packages into `~/ULM-VLM-OCR-IE/.venv`.
+First-time Paddle GPU installation downloads a large wheel and several CUDA runtime packages. That's expected. Its CUDA packages now belong only to `.venv-ocr`; they cannot replace the working PyTorch packages in `.venv`.
 
-### 3. Install PyTorch and the matching Torchvision build
-
-Our first real benchmark attempt revealed that **both direct VLM jobs failed because `torchvision` was not installed**, even though `torch` and `transformers` were present.
-
-The repository includes [`requirements/helix-pytorch-cu130.txt`](requirements/helix-pytorch-cu130.txt), which specifies the matched pair: **PyTorch `2.14.1+cu130`** and **Torchvision `0.29.1+cu130`** from the [official PyTorch CUDA 13.0 wheels](https://download.pytorch.org/whl/cu130/torchvision/).
+Check the backend import without requiring an allocated GPU:
 
 ```bash
-.venv/bin/python -m pip install -r requirements/helix-pytorch-cu130.txt
-```
-
-If PyTorch `2.14.1+cu130` is already installed, pip should reuse it rather than replace it. Avoid installing a CUDA 12.6 Torchvision wheel against this CUDA 13.0 Torch build.
-
-### 4. Install PaddlePaddle GPU and PaddleOCR
-
-Our first OCR job failed with `ModuleNotFoundError: No module named 'paddleocr'`. Because the shared OCR cache was never created, **both OCR + LM runs also failed**.
-
-PaddleOCR is the document-recognition package; **PaddlePaddle GPU** is its inference backend. They are different packages, and both must be installed.
-
-For the current CUDA 13.0 profile, [`requirements/helix-paddle-cu130.txt`](requirements/helix-paddle-cu130.txt) uses the official **PaddlePaddle GPU 3.3.0 CUDA 13.0 wheel**, as described in the [PaddlePaddle Linux pip installation guide](https://github.com/PaddlePaddle/docs/blob/develop/docs/install/pip/linux-pip_en.md).
-
-```bash
-.venv/bin/python -m pip install -r requirements/helix-paddle-cu130.txt
-```
-
-Then install both the extractor's VLM and OCR extras. Our current Helix versions are **PaddleOCR 3.7.0** and **PaddleX 3.7.2**, while the separately installed inference backend is **PaddlePaddle GPU 3.3.0**:
-
-```bash
-.venv/bin/python -m pip install -e '.[vlm,ocr]'
-```
-
-The `[vlm]` extra includes **`torchvision`**, which the previous setup omitted. The `[ocr]` extra pins **`paddleocr==3.7.0`** and **`paddlex==3.7.2`**. **These two packages do not provide the `paddle` Python module**: install `paddlepaddle-gpu` separately from the CUDA 13.0 index. Our failed OCR job downloaded `PP-OCRv6_medium_det` successfully, then stopped with `Engine 'paddle_static' is unavailable because dependency 'paddlepaddle' is not installed.` Both `paddlepaddle-gpu` and `import paddle` were confirmed absent from that environment.
-
-Verify the backend is installed in **this project's** virtual environment:
-
-```bash
-.venv/bin/python - <<'PY'
+.venv-ocr/bin/python - <<'PY'
 import paddle
 print("PaddlePaddle:", paddle.__version__)
-print("CUDA compiled:", paddle.is_compiled_with_cuda())
+print("Compiled with CUDA:", paddle.is_compiled_with_cuda())
 PY
 ```
 
-This must show `CUDA compiled: True`. It does **not** replace the A100 SLURM verification; loading a CUDA-enabled package on a login node is different from executing on a GPU.
+We expect `Compiled with CUDA: True`. Actual A100 operations must still pass the SLURM tests.
 
-**Do not install the CPU-only `paddlepaddle` alongside `paddlepaddle-gpu`.** If pip reports conflicts, examine them before proceeding. PyTorch's CUDA build version alone does not prove PaddlePaddle will run on the A100; the SLURM tests below do that.
+### 4. Install official OCRBench v2 KIE scoring requirements in the PyTorch environment
 
-### 5. Check installed packages before allocating GPUs
+The official evaluator executes on the CPU collector, which uses `.venv`, **not** `.venv-ocr`. Our English KIE-only requirements avoid the unused `Polygon3` C extension (which requires `Python.h` on Helix), while preserving the official KIE scorer.
 
 ```bash
+# Only clone the official repository if you do not already have it:
+test -f "$HOME/MultimodalOCR/OCRBench_v2/eval_scripts/eval.py" || \
+  git clone https://github.com/Yuliang-Liu/MultimodalOCR.git "$HOME/MultimodalOCR"
+
+.venv/bin/python -m pip install -r requirements/ocrbench-v2-kie-eval.txt
+
 .venv/bin/python -m pip check
 .venv/bin/python scripts/check_dependencies.py --stage all
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The dependency checker verifies required distributions and the installed `paddle` module, including whether its build supports CUDA. It runs without requesting GPU resources. In particular, it rejects an environment that has only `paddleocr` and `paddlex` but is missing `paddlepaddle-gpu`, which caused the latest OCR failure.
-
-If your full evaluator is not yet available, clone its repository:
-
-```bash
-# Only when ~/MultimodalOCR does not already exist:
-git clone https://github.com/Yuliang-Liu/MultimodalOCR.git ~/MultimodalOCR
-
-.venv/bin/python -m pip install -r requirements/ocrbench-v2-kie-eval.txt
-.venv/bin/python -m pip check
-```
-
-**Why a separate KIE requirements file?** The upstream `OCRBench_v2/requirements.txt` includes `Polygon3`, which failed to compile on Helix's Python 3.12 because the compiler could not find `Python.h`. Polygon is loaded dynamically only for the **text-spotting** metric, not English KIE. Our [`requirements/ocrbench-v2-kie-eval.txt`](requirements/ocrbench-v2-kie-eval.txt) keeps the other dependencies required to import and run the **unchanged official `eval.py` for KIE**, avoiding the unnecessary C-extension build. If you evaluate other OCRBench tasks, this selective environment may be insufficient.
-
-Use the same official evaluator commit for every run (previous project reference: `4e363b3f499811b43d792ef0bb33932ef05eca27`). Check dependency compatibility again after installing its requirements.
+`--stage all` checks both virtual environments separately. It verifies the Python packages and known CUDA library versions; it does **not** run GPU inference. For reproducibility, use the same official evaluator commit across runs (reference: `4e363b3f499811b43d792ef0bb33932ef05eca27`).
 
 ## GPU verification with SLURM
 
@@ -257,7 +262,7 @@ Default scheduling uses `gpu-single`, `gpu:A100:1`, four CPUs, 64 GiB host RAM a
 
 **Use this instead of `extractor benchmark` when repairing a failed batch.** A fresh `benchmark` command creates new run UUIDs and schedules all configured models; `resume` reads the **original immutable** `batch.json`, keeps its run IDs, checks which predictions already exist, and submits only the incomplete jobs. `--ocr-only` adds an explicit guarantee: **no direct VLM GPU jobs are submitted**, regardless of their recorded state.
 
-Our existing batch is `5dd8a6af-de7f-4d4c-b496-44068933a072`. First install and verify `paddlepaddle-gpu`, then make sure the PaddlePaddle and single-image OCR SLURM checks have **PASSED**.
+Our existing batch is `5dd8a6af-de7f-4d4c-b496-44068933a072`. First repair `.venv`, install Paddle GPU **only into `.venv-ocr`**, and make sure the PyTorch, PaddlePaddle and single-image OCR SLURM checks have **PASSED**.
 
 ```bash
 cd ~/ULM-Project-Extractor-VLM-OCRLM
@@ -340,8 +345,9 @@ Inference timing includes model input preparation, generation and decoding; OCR 
 | `uv: command not found` | Use `/usr/bin/python3.12 -m venv` and `.venv/bin/python -m pip`; `uv` is optional. |
 | `.venv/bin/python: No such file or directory` | Create the virtual environment from the repository root; verify Python and pip before installing. |
 | `Torchvision library ... was not found` | Install `requirements/helix-pytorch-cu130.txt`, then the `[vlm]` extra. Match the Torchvision **CUDA 13.0** wheel to the installed CUDA 13.0 Torch build. |
-| `No module named paddleocr` | Install `-e '.[ocr]'`; also install and verify **GPU PaddlePaddle** separately. |
-| `Engine 'paddle_static' ... dependency 'paddlepaddle' is not installed` | PaddleOCR and PaddleX exist, but `paddle` is missing. Install `requirements/helix-paddle-cu130.txt` in the current `.venv`, check `import paddle`, then run the PaddlePaddle and OCR smoke tests. Do **not** install CPU-only `paddlepaddle` alongside `paddlepaddle-gpu`. |
+| `No module named paddleocr` | Install `-e '.[ocr]'` in **`.venv-ocr`**, then install `requirements/helix-paddle-cu130.txt` in that same OCR environment. |
+| `Engine 'paddle_static' ... dependency 'paddlepaddle' is not installed` | PaddleOCR and PaddleX exist, but `paddle` is missing. Install `paddlepaddle-gpu` in **`.venv-ocr` only**, verify `import paddle`, and run PaddlePaddle/OCR smoke tests. |
+| `torch 2.14.1 requires nvidia-cudnn-cu13 ...` | PaddlePaddle was installed in the Torch environment and downgraded shared CUDA packages. Remove the Paddle packages from `.venv`, restore Torch CUDA library versions using `requirements/helix-torch-repair-cu130.txt`, and create `.venv-ocr` instead. |
 | Need to resume only OCR + LM | Use `extractor resume --batch /path/to/original/batch.json --ocr-only`, preceded by `--dry-run`. Do not submit a fresh `extractor benchmark`. |
 | `scoring_failed` after 400 completed predictions | The GPU inference succeeded but the official evaluator failed. Inspect `runs/<run-uuid>/scoring.log`; install `requirements/ocrbench-v2-kie-eval.txt`. **Do not rerun model inference.** Resubmit the CPU collector for the existing batch, as shown above. |
 | `Polygon3` build error: `Python.h: No such file or directory` | For **English KIE only**, install `requirements/ocrbench-v2-kie-eval.txt` instead of upstream's full requirements file. It omits text-spotting-only Polygon3; the official scoring code is unchanged. |

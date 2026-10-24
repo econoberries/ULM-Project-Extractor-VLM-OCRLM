@@ -9,3 +9,6 @@ __pycache__/
 
 # Local output logs from short SLURM GPU diagnostics
 gpu-check-*.out
+
+# Isolated PaddleOCR/PaddlePaddle GPU environment
+/.venv-ocr/
