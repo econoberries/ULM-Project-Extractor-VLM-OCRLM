@@ -78,11 +78,11 @@ def run_summary(batch, spec):
                 # the subprocess exit code, which hides missing dependencies.
                 log = run_dir / "scoring.log"
                 log.write_text(
-                    "Official OCRBench evaluator failed\\n"
-                    + "Command: " + " ".join(command) + "\\n"
-                    + "Exit status: " + str(exc.returncode) + "\\n"
-                    + "STDOUT:\\n" + str(exc.stdout or "") + "\\n"
-                    + "STDERR:\\n" + str(exc.stderr or "") + "\\n",
+                    "Official OCRBench evaluator failed\n"
+                    + "Command: " + " ".join(command) + "\n"
+                    + "Exit status: " + str(exc.returncode) + "\n"
+                    + "STDOUT:\n" + str(exc.stdout or "") + "\n"
+                    + "STDERR:\n" + str(exc.stderr or "") + "\n",
                     encoding="utf-8",
                 )
                 detail = (exc.stderr or exc.stdout or "").strip().splitlines()
