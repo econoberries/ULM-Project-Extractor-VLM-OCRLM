@@ -8,6 +8,8 @@ Examples:
 "all" checks .venv for Torch and delegates OCR checks to .venv-ocr.
 """
 from argparse import ArgumentParser
+import ctypes
+import os
 from importlib.metadata import PackageNotFoundError, version
 import importlib.util
 from pathlib import Path
@@ -102,15 +104,31 @@ def check(stage="all"):
             print("MISSING  Python module 'paddle' (install paddlepaddle-gpu)")
             problems.append("paddle")
         else:
+            # CUDA-enabled PaddlePaddle loads the NVIDIA driver at import time.
+            # Helix login nodes may lack libcuda.so.1 even when the GPU wheel
+            # is installed correctly. Defer the runtime test to a SLURM A100 job.
+            driver_available = True
             try:
-                import paddle
-                gpu_build = bool(paddle.is_compiled_with_cuda())
-                print(f"OK       import paddle {paddle.__version__}; CUDA build: {gpu_build}")
-                if not gpu_build:
-                    problems.append("paddle CUDA")
-            except Exception as exc:
-                print(f"ERROR    import paddle: {type(exc).__name__}: {exc}")
-                problems.append("paddle import")
+                ctypes.CDLL("libcuda.so.1")
+            except OSError:
+                driver_available = False
+
+            if not driver_available and not os.environ.get("SLURM_JOB_ID"):
+                print(
+                    "DEFERRED import paddle: NVIDIA driver libcuda.so.1 is not "
+                    "available on this node; verify on an A100 using "
+                    "'sbatch slurm/check_environment.sbatch paddle'"
+                )
+            else:
+                try:
+                    import paddle
+                    gpu_build = bool(paddle.is_compiled_with_cuda())
+                    print(f"OK       import paddle {paddle.__version__}; CUDA build: {gpu_build}")
+                    if not gpu_build:
+                        problems.append("paddle CUDA")
+                except Exception as exc:
+                    print(f"ERROR    import paddle: {type(exc).__name__}: {exc}")
+                    problems.append("paddle import")
     else:
         if _installed("paddlepaddle-gpu"):
             print("CONFLICT paddlepaddle-gpu installed in PyTorch environment")
