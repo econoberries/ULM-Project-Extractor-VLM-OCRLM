@@ -74,6 +74,16 @@ def check(stage="all"):
             print(f"MISSING  {dist}")
             problems.append(dist)
             continue
+        if dist == "torch":
+            # CUDA-local suffixes may be absent from wheel metadata on Helix.
+            # The imported runtime reports the actual build, e.g. 2.14.1+cu130.
+            try:
+                import torch
+                installed = torch.__version__
+            except Exception as exc:
+                print(f"ERROR    import torch: {type(exc).__name__}: {exc}")
+                problems.append("torch import")
+                continue
         expected = HELIX_EXPECTED.get(dist)
         if expected and installed != expected:
             print(f"CHECK    {dist} {installed} (expected {expected})")
