@@ -272,94 +272,125 @@ The new schedule is **PP-StructureV3 parser job (`.venv-ppstructure`) → Qwen3.
 
 The scorer defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; pass `--evaluator PATH` if your upstream checkout differs.
 
-## Repeat the original four baseline models (no LA OCR or PP-Structure)
+## Paired bootstrap inference for extraction accuracy
 
-Use [`model-baselines.yml`](model-baselines.yml) and
-[`scripts/run_repeated_baselines.sh`](scripts/run_repeated_baselines.sh).
-This selection is **only** the four original experiments:
-`qwen35_vlm`, `minicpm_vlm`, `qwen35_ocr`, and `qwen25_ocr`.
-It retains the same pinned checkpoints, unmodified OCRBench questions,
-`max_new_tokens: 384`, `do_sample: false`, and the full 400-document dataset.
+The recommended **primary experiment is one complete 400-document run per
+architecture, with greedy decoding (`do_sample: false`)**. We do **not** need
+to rerun the same deterministic model multiple times merely to quantify accuracy
+uncertainty. Instead, use
+[`scripts/bootstrap_kie.py`](scripts/bootstrap_kie.py) on existing
+**officially scored `predictions_scored.json`** files.
 
-The **single positional parameter** is the number of complete repetitions.
-**Recommended starting point: three**. For example, on the Helix login node:
+This script compares the original four experiments by default:
+`qwen35_vlm`, `minicpm_vlm`, `qwen35_ocr`, `qwen25_ocr`.
+[`model-baselines.yml`](model-baselines.yml) is retained **only as a
+convenient selection for a single four-model benchmark**, not for repeated runs.
+LA-OCR and PP-StructureV3 are **not** included in the default bootstrap,
+but may be selected explicitly using `--models`.
+
+### 1. Find a completed batch
+
+The existing batch manifest identifies the run UUID for each experiment.
+Find the relevant batch IDs by listing the historical summaries:
 
 ```bash
 cd ~/ULM-Project-Extractor-VLM-OCRLM
 git pull --ff-only origin main
-export EN_PART="$HOME/ULM-VLM-OCR-IE/data/OCRBench_v2/EN_part"
-export GPU_TYPE=A100
-
-# Validate the complete three-repeat Slurm plan without submitting anything:
-bash scripts/run_repeated_baselines.sh 3 --dry-run
-
-# Submit three full independent batches, each containing four models:
-bash scripts/run_repeated_baselines.sh 3
+find runs/batches -name benchmark_summary.csv -print
 ```
 
-To repeat five times instead, change **only** the positional argument:
-`bash scripts/run_repeated_baselines.sh 5`. The script accepts 1–20
-repetitions to protect against accidental very large submissions. Optional
-environment variables: `GPU_PARTITION`, `COLLECT_PARTITION`, `GPU_MEM`,
-`GPU_CPUS`, `GPU_TIME`, `EVALUATOR_PATH`, and `REPEAT_OUTPUT_BASE`.
-For example, `GPU_TIME=04:00:00` raises the GPU-job time limit. Run this
-script from the login node, not inside an `sbatch` job. It **queues** jobs
-and does **not** wait for their completion; check `squeue -u "$USER"` and
-the relevant Slurm logs.
+Each included run must have `run.json` status `scored` and exactly
+400 **numeric official per-document scores** in its `predictions_scored.json`.
+There is **no Slurm submission** in this analysis.
 
-Each complete repetition schedules **five GPU jobs**
-(two VLM jobs, one shared flat PaddleOCR extraction, and two OCR→LM jobs)
-plus one **CPU collector**, using the existing Slurm dependency design.
-The script runs the OCR extraction independently per repetition to measure
-end-to-end execution, while sharing flat OCR between both OCR→LM models
-*within* each repetition. All repetitions are queued when the command runs;
-the Slurm scheduler manages their execution subject to your allocation.
-For GPU-memory comparisons, check the actual allocated A100 variant (40 GB
-or 80 GB) rather than assuming the `A100` label fixes VRAM.
+### 2. Estimate confidence intervals
 
-To prevent confusing repeated measurements with older PP/LA experiments,
-the script creates one **new series directory** per invocation:
-
-```text
-runs/repeated_baselines/
-  baselines-<UTC-timestamp>-<unique-suffix>/
-    series_manifest.tsv          # repeat_index, batch_id, paths, job IDs, git SHA
-    repeat-001/
-      submission.log
-      batches/<batch-id>/benchmark_summary.csv
-      <run-id>/predictions_scored.json
-    repeat-002/
-      ...
-    repeat-003/
-      ...
-```
-
-Each repetition has new batch/run UUIDs. **No existing `runs/` artifacts
-are deleted or overwritten.** The script prints the exact series path.
-After the CPU collectors finish, aggregate only that series:
+If the four original experiments were in one batch:
 
 ```bash
-.venv/bin/python scripts/aggregate_repeated_baselines.py \
-  runs/repeated_baselines/<series-id>
+.venv/bin/python scripts/bootstrap_kie.py \
+  --batch runs/batches/<BATCH_ID>/batch.json \
+  --n-bootstrap 10000 \
+  --seed 2026
 ```
 
-This writes `repeated_runs.csv` (all individual runs and statuses) and
-`repeat_summary.csv` (mean and sample SD for accuracy and latency) inside
-that series folder. Pending or failed runs are **not** counted as zero.
-It rejects different dataset manifest hashes, and it never includes
-other historical experiments or PP/LA OCR. Monitor statuses in
-`repeated_runs.csv` and rerun the aggregator after the collectors finish.
+If selected experiments are in separate batches, repeat `--batch`.
+Only select one version/run of each experiment ID; the tool deliberately
+rejects ambiguous duplicates and datasets with mismatched manifest hashes.
 
-**Statistical interpretation:** all runs use the *same* 400 images, pinned
-weights, `do_sample: false`, and default deterministic generation options.
-Three repetitions are a reasonable initial check of runtime and software
-reproducibility, but are **not 1,200 independent test documents per model**.
-Report accuracy on 400 matched images, and estimate accuracy uncertainty
-using a **paired document-level bootstrap** or similarly appropriate
-within-document method. If accuracy differs negligibly across runs, further
-repetition adds little statistical information; increase to five mainly to
-stabilize time/resource measurements. Queuing and competing GPU activity
-may still contribute to latency variation.
+To compare just two implementations or include PP/LA OCR, select their IDs
+explicitly. For example:
+
+```bash
+.venv/bin/python scripts/bootstrap_kie.py \
+  --batch runs/batches/<DIRECT_OR_OCR_BATCH_ID>/batch.json \
+  --batch runs/batches/<PP_BATCH_ID>/batch.json \
+  --models qwen35_ocr qwen35_ppstructure \
+  --n-bootstrap 10000 --seed 2026
+```
+
+Historical and revised PP versions share the same model ID, so choose only
+the relevant PP batch or run separate analyses. This avoids silently
+combining PP Markdown v1 and recovered Markdown v2.
+
+### 3. Read the statistical results
+
+By default the script creates a new unique folder under
+`runs/analysis/paired-bootstrap-<timestamp>-<id>/` and writes:
+
+| File | Contents |
+| --- | --- |
+| `bootstrap_models.csv` | Mean official score and bootstrap confidence interval by experiment, overall and within each dataset |
+| `bootstrap_pairs.csv` | **Paired A–B mean score difference**, percentile confidence intervals, plus Bonferroni simultaneous intervals for the family of model comparisons |
+| `paired_document_scores.csv` | Aligned 400-document score matrix for replication and error analysis |
+| `analysis_metadata.json` | Included run and batch IDs, checkpoint revisions, dataset hash, bootstrap seed, method and parameters |
+
+The default is **10,000 bootstrap resamples**, a fixed random seed `2026`,
+and **95% confidence intervals**. Each bootstrap draw resamples *document
+identities jointly across all models*, preserving the paired comparison.
+By default, sampling is **stratified** so each draw contains exactly the
+benchmark's 48 FUNSD, 177 POIE, 25 Receipt, and 150 SROIE documents.
+Use `--unstratified` only if you intentionally want uncertainty from varying
+the empirical proportions of document types.
+
+For model A and B, the primary quantity is:
+
+```text
+mean_difference_a_minus_b = mean(score_A_on_document_i -
+                                 score_B_on_document_i), i = 1..400
+```
+
+The scripts use **official per-document KIE scores averaged over the benchmark**,
+the same aggregation used by the existing collector. They do not substitute
+token-level micro-F1 or rerun the OCRBench evaluator. When the paired 95% CI
+excludes zero, it indicates a directionally consistent difference under this
+document-resampling model. For multiple model pairs, consult the conservative
+`familywise_ci_*` columns as well; the exploratory dataset-specific intervals
+are not jointly adjusted over all dataset analyses.
+
+**Scope of uncertainty:** these intervals reflect variation across documents
+drawn from OCRBench v2 (with fixed type proportions), **not** generation-level
+sampling, independent benchmark replications, or new deployment domains.
+Repeating greedy decoding provides little additional accuracy information
+when output predictions remain unchanged. Repeat model inference separately
+only for an explicit runtime stability or nondeterminism analysis.
+
+### Optional: run only the four primary models once
+
+If you still need their predictions and have not already scored them:
+
+```bash
+.venv/bin/extractor benchmark \
+  --input "$EN_PART" \
+  --models model-baselines.yml \
+  --partition gpu-single \
+  --gres "gpu:A100:1" \
+  --gpu-family A100 \
+  --time 04:00:00
+```
+
+Do not run this if the existing four scored runs are sufficient. Use the
+saved `predictions_scored.json` files instead.
 
 ## Monitor runs and read results
 
