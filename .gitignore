@@ -15,3 +15,6 @@ gpu-check-*.out
 
 # Separate coordinate-preserving PaddleOCR environment
 /.venv-la-ocr/
+
+# PP-StructureV3 document parser and PaddlePaddle GPU environment
+/.venv-ppstructure/

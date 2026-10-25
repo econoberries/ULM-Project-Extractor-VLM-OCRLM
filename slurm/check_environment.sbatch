@@ -21,13 +21,14 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 if [[ $# -lt 1 ]]; then
-  echo "Usage: sbatch slurm/check_environment.sbatch {torch|paddle|ocr IMAGE|la-paddle|la-ocr IMAGE|model EN_PART [EXPERIMENT_ID]}" >&2
+  echo "Usage: sbatch slurm/check_environment.sbatch {torch|paddle|ocr IMAGE|la-paddle|la-ocr IMAGE|pp-paddle|ppstructure IMAGE|model EN_PART [EXPERIMENT_ID]}" >&2
   exit 2
 fi
 
 case "$1" in
   paddle|ocr) python_bin=".venv-ocr/bin/python" ;;
   la-paddle|la-ocr) python_bin=".venv-la-ocr/bin/python" ;;
+  pp-paddle|ppstructure) python_bin=".venv-ppstructure/bin/python" ;;
   torch|model) python_bin=".venv/bin/python" ;;
   *) echo "Unknown GPU test '$1'." >&2; exit 2 ;;
 esac
@@ -58,7 +59,7 @@ case "$1" in
   torch)
     exec "$python_bin" scripts/check_torch_cuda.py
     ;;
-  paddle|la-paddle)
+  paddle|la-paddle|pp-paddle)
     exec "$python_bin" scripts/check_paddle_cuda.py
     ;;
   ocr)
@@ -74,6 +75,13 @@ case "$1" in
       exit 2
     fi
     exec "$python_bin" scripts/check_layoutocr.py --image "$2"
+    ;;
+  ppstructure)
+    if [[ $# -ne 2 ]]; then
+      echo "Usage: sbatch slurm/check_environment.sbatch ppstructure /absolute/path/to/image.jpg" >&2
+      exit 2
+    fi
+    exec "$python_bin" scripts/check_ppstructure.py --image "$2"
     ;;
   model)
     if [[ $# -lt 2 || $# -gt 3 ]]; then

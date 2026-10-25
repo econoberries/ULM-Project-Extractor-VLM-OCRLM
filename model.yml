@@ -34,3 +34,9 @@ models:
     adapter: qwen35
     checkpoint: Qwen/Qwen3.5-9B
     ocr: paddleocr_layout
+
+  - id: qwen35_ppstructure
+    pipeline: ppstructure_lm
+    adapter: qwen35
+    checkpoint: Qwen/Qwen3.5-9B
+    ocr: ppstructurev3

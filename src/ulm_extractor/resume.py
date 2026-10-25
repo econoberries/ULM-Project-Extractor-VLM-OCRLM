@@ -41,9 +41,14 @@ def _ocr_cache_complete(batch, documents, engine="paddleocr"):
         raise ValueError("Existing PaddleOCR cache has a different dataset manifest")
     if engine == "paddleocr_layout" and index.get("format") != "paddleocr-layout-v1":
         raise ValueError("Existing layout OCR cache has an incompatible format")
+    if engine == "ppstructurev3":
+        from .ppstructure import FORMAT, SETTINGS
+        if index.get("format") != FORMAT or index.get("settings") != SETTINGS:
+            raise ValueError("Existing PP-StructureV3 cache format/settings mismatch")
     # The resume CLI runs from .venv (PyTorch), but the OCR model runs
     # exclusively from .venv-ocr. Check the *correct* PaddleOCR installation.
-    env_dir = ".venv-la-ocr" if engine == "paddleocr_layout" else ".venv-ocr"
+    env_dir = (".venv-ppstructure" if engine == "ppstructurev3" else
+               ".venv-la-ocr" if engine == "paddleocr_layout" else ".venv-ocr")
     ocr_python = ROOT / env_dir / "bin" / "python"
     if not ocr_python.is_file():
         raise ValueError(f"Missing {env_dir}/bin/python; create OCR environment first")
@@ -59,6 +64,13 @@ def _ocr_cache_complete(batch, documents, engine="paddleocr"):
     installed_version = proc.stdout.strip()
     if index.get("paddleocr_version") != installed_version:
         raise ValueError("Existing PaddleOCR cache uses a different PaddleOCR version")
+    if engine == "ppstructurev3":
+        installed_paddlex = subprocess.run([
+            str(ocr_python), "-c",
+            "from importlib.metadata import version; print(version('paddlex'))"
+        ], capture_output=True, text=True, check=True).stdout.strip()
+        if index.get("paddlex_version") != installed_paddlex:
+            raise ValueError("Existing PP-StructureV3 cache uses a different PaddleX version")
     records = index.get("records")
     expected = {key_for(item) for item in documents}
     if not isinstance(records, dict) or set(records) - expected:
@@ -128,7 +140,7 @@ def resume_batch(batch_path, args):
     # Each OCR representation has its own cache and resume dependencies.
     required_engines = {s.get("ocr") for s in pending if s.get("ocr")}
     ocr_needed = set()
-    for engine in ("paddleocr", "paddleocr_layout"):
+    for engine in ("paddleocr", "paddleocr_layout", "ppstructurev3"):
         if engine not in required_engines:
             continue
         if _ocr_cache_complete(batch, documents, engine):
@@ -149,6 +161,7 @@ def resume_batch(batch_path, args):
     for engine, action, jobname in (
         ("paddleocr", "ocr", "ulm-ocr-resume"),
         ("paddleocr_layout", "ocr-layout", "ulm-la-ocr-resume"),
+        ("ppstructurev3", "ppstructure", "ulm-ppstructure-resume"),
     ):
         if engine in ocr_needed:
             jobs[engine] = _sbatch([

@@ -11,7 +11,7 @@ dependencies = ["PyYAML>=6.0,<7", "pandas>=2.0,<3"]
 
 # CUDA-specific wheels are installed separately using requirements/helix-*.txt.
 # Use separate virtual environments: .venv installs [vlm] for all LM workers,
-# .venv-ocr installs [ocr] and PaddlePaddle GPU for the shared OCR worker.
+# .venv-ocr, .venv-la-ocr and .venv-ppstructure install [ocr] and Paddle GPU.
 # Never combine [vlm,ocr] with paddlepaddle-gpu in one environment.
 [project.optional-dependencies]
 vlm = [
@@ -24,6 +24,9 @@ vlm = [
 # Pin the PaddleOCR/PaddleX versions used by the current Helix benchmark.
 # The PaddlePaddle GPU backend is installed separately from the cu130 index.
 ocr = ["paddleocr==3.7.0", "paddlex==3.7.2"]
+# PP-StructureV3 requires the PaddleOCR doc-parser optional dependency group.
+# The PaddlePaddle cu130 GPU wheel must still be installed separately.
+ppstructure = ["paddleocr[doc-parser]==3.7.0", "paddlex==3.7.2"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

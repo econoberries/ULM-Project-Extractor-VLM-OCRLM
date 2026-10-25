@@ -4,9 +4,10 @@ Examples:
   .venv/bin/python scripts/check_dependencies.py --stage vlm
   .venv-ocr/bin/python scripts/check_dependencies.py --stage ocr
   .venv-la-ocr/bin/python scripts/check_dependencies.py --stage la-ocr
+  .venv-ppstructure/bin/python scripts/check_dependencies.py --stage ppstructure
   .venv/bin/python scripts/check_dependencies.py --stage all
 
-"all" checks .venv for Torch and both independent OCR environments.
+"all" checks .venv for Torch and all three independent Paddle environments.
 """
 from argparse import ArgumentParser
 import ctypes
@@ -49,10 +50,11 @@ def check(stage="all"):
         main_python = ROOT / ".venv" / "bin" / "python"
         ocr_python = ROOT / ".venv-ocr" / "bin" / "python"
         la_python = ROOT / ".venv-la-ocr" / "bin" / "python"
-        if not all(p.is_file() for p in (main_python, ocr_python, la_python)):
-            print("Missing .venv, .venv-ocr or .venv-la-ocr; see README installation instructions")
+        pp_python = ROOT / ".venv-ppstructure" / "bin" / "python"
+        if not all(p.is_file() for p in (main_python, ocr_python, la_python, pp_python)):
+            print("Missing one of .venv, .venv-ocr, .venv-la-ocr, .venv-ppstructure; see README")
             return 1
-        for env, step in ((main_python, "vlm"), (ocr_python, "ocr"), (la_python, "la-ocr")):
+        for env, step in ((main_python, "vlm"), (ocr_python, "ocr"), (la_python, "la-ocr"), (pp_python, "ppstructure")):
             print(f"\nChecking {env.name} in {env.parent.parent.name}: {step}", flush=True)
             result = subprocess.run([str(env), str(Path(__file__).resolve()), "--stage", step])
             if result.returncode:
@@ -62,15 +64,16 @@ def check(stage="all"):
     if sys.version_info[:2] != (3, 12):
         print(f"ERROR: Python 3.12 required; using {sys.version.split()[0]}")
         return 1
-    is_ocr = stage in {"ocr", "la-ocr"}
-    expected_env = (".venv-la-ocr" if stage == "la-ocr" else
+    is_ocr = stage in {"ocr", "la-ocr", "ppstructure"}
+    expected_env = (".venv-ppstructure" if stage == "ppstructure" else
+                    ".venv-la-ocr" if stage == "la-ocr" else
                     ".venv-ocr" if is_ocr else ".venv")
     if Path(sys.prefix).name != expected_env:
         print(f"ERROR: {stage} checks must run in {expected_env}, got {sys.prefix}")
         return 1
 
     required = list(REQUIRED["base"])
-    if stage in {"vlm", "ocr"}:
+    if stage == "vlm" or is_ocr:
         required += REQUIRED["ocr"] if is_ocr else REQUIRED[stage]
     problems = []
     for dist in required:
@@ -152,7 +155,7 @@ def check(stage="all"):
 
 def main(argv=None):
     parser = ArgumentParser(description="Verify separate Helix PyTorch/Paddle environments")
-    parser.add_argument("--stage", choices=("base", "vlm", "ocr", "la-ocr", "all"), default="all")
+    parser.add_argument("--stage", choices=("base", "vlm", "ocr", "la-ocr", "ppstructure", "all"), default="all")
     return check(parser.parse_args(argv).stage)
 
 

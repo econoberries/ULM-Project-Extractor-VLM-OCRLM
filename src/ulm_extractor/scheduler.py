@@ -65,6 +65,7 @@ def submit_batch(data, models, args):
     for engine, action, job_name in (
         ("paddleocr", "ocr", "ulm-ocr"),
         ("paddleocr_layout", "ocr-layout", "ulm-la-ocr"),
+        ("ppstructurev3", "ppstructure", "ulm-ppstructure"),
     ):
         if any(x.get("ocr") == engine for x in runs):
             jobs[engine] = _sbatch([

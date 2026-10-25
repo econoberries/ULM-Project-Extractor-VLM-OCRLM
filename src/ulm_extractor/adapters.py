@@ -78,6 +78,10 @@ class InferenceAdapter:
                 if (not isinstance(layout, dict) or layout.get("format") != FORMAT
                         or not isinstance(layout.get("lines"), list)):
                     raise ValueError("Expected PaddleOCR layout JSON with coordinates")
+            if self.config["pipeline"] == "ppstructure_lm":
+                if not ocr_text.strip():
+                    raise ValueError("PP-StructureV3 Markdown is empty")
+                # Pass the cached .md file contents as text, not an image or JSON.
             payload = ocr_text + "\n\n" + question
             content = payload if adapter == "qwen25" else [{"type": "text", "text": payload}]
             messages = [{"role": "user", "content": content}]

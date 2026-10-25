@@ -1,0 +1,15 @@
+# Run the full 400-document PP-StructureV3 Markdown -> Qwen3.5 experiment only.
+version: 1
+
+inference:
+  prompt_mode: benchmark_native
+  max_new_tokens: 384
+  batch_size: 1
+  do_sample: false
+
+models:
+  - id: qwen35_ppstructure
+    pipeline: ppstructure_lm
+    adapter: qwen35
+    checkpoint: Qwen/Qwen3.5-9B
+    ocr: ppstructurev3

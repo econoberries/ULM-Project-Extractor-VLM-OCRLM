@@ -51,6 +51,10 @@ def run_model(batch, run_id):
                 raise ValueError("OCR cache does not match the benchmark manifest")
             if engine == "paddleocr_layout" and cache.get("format") != "paddleocr-layout-v1":
                 raise ValueError("Layout OCR cache format mismatch")
+            if engine == "ppstructurev3":
+                from .ppstructure import FORMAT, SETTINGS
+                if cache.get("format") != FORMAT or cache.get("settings") != SETTINGS:
+                    raise ValueError("PP-StructureV3 Markdown cache configuration mismatch")
             ocr_index = cache["records"]
             if len(ocr_index) != 400 or any(key_for(r) not in ocr_index for r in records):
                 raise ValueError(f"Shared {engine} cache is incomplete; not loading the language model")
@@ -115,7 +119,7 @@ def run_model(batch, run_id):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m ulm_extractor.worker")
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("ocr", "ocr-layout", "run", "collect"):
+    for name in ("ocr", "ocr-layout", "ppstructure", "run", "collect"):
         p = sub.add_parser(name)
         p.add_argument("--batch", type=Path, required=True)
         if name == "run":
@@ -125,6 +129,9 @@ def main(argv=None):
     if args.action in {"ocr", "ocr-layout"}:
         from .ocr import run_ocr
         run_ocr(batch, engine="paddleocr_layout" if args.action == "ocr-layout" else "paddleocr")
+    elif args.action == "ppstructure":
+        from .ppstructure import run_ppstructure
+        run_ppstructure(batch)
     elif args.action == "run":
         run_model(batch, args.run_id)
     else:
