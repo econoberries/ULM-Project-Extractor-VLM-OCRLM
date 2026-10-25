@@ -14,9 +14,10 @@ Configure experiments in [`model.yml`](model.yml):
 | `minicpm_vlm` | Image → VLM | MiniCPM-V-4.6 |
 | `qwen35_ocr` | Image → PaddleOCR → LM | Qwen3.5-9B |
 | `qwen25_ocr` | Image → flat PaddleOCR → LM | Qwen2.5-14B-Instruct-1M |
-| `qwen35_laocr` | Image → layout JSON PaddleOCR → LM | Qwen3.5-9B |
+| `qwen35_laocr` | Image → coordinate JSON PaddleOCR → LM | Qwen3.5-9B |
+| `qwen35_ppstructure` | Image → PP-StructureV3 Markdown → LM | Qwen3.5-9B |
 
-The two **flat OCR + LM** runs share the original `paddleocr` cache. The **layout-aware** run uses a different `paddleocr_layout` cache and a separate OCR environment. All LM models still use `.venv`. The original OCRBench questions are used without rewriting; the default generation limit is 384 tokens.
+The two **flat OCR + LM** runs share `paddleocr` OCR cache. **Coordinate JSON** uses `paddleocr_layout`, and **PP-StructureV3 Markdown** uses `ppstructurev3`. Each extractor has an isolated Paddle environment; **all language models still run in `.venv`**. All six experiments use the same 400 OCRBench v2 English KIE documents, the unmodified questions, the same official scorer, and the default 384-token generation limit.
 
 **What “layout-aware” means here:** we use the **same pretrained PP-OCRv6 text detector/recognizer** as flat OCR. Instead of discarding coordinates, we serialize every `rec_texts` entry together with its `rec_boxes` [x_min, y_min, x_max, y_max] and `rec_scores` into **JSON text**. We include the source image dimensions and send that JSON string followed by the unchanged question to Qwen3.5. This is **coordinate-aware OCR**, not PP-StructureV3 table recognition or a newly trained model.
 
@@ -26,7 +27,16 @@ Example LM input (illustrative):
 {"format":"paddleocr-layout-v1","coordinate_system":"absolute_pixels","box_format":"xyxy","image_size":{"width":1000,"height":800},"lines":[{"text":"Protein","bbox":[50,200,140,222],"confidence":0.99},{"text":"8g","bbox":[650,200,700,222],"confidence":0.98}]}
 ```
 
-The benchmark question follows the JSON as plain text. This enables the LM to reason about row/column proximity while keeping the recognizer fixed. Each experiment has its own GPU model job, and the CPU collector uses the official KIE evaluator.
+The benchmark question follows the JSON as plain text. This lets Qwen infer proximity, but does **not** reconstruct tables.
+
+**The fourth pipeline uses PP-StructureV3 instead:** pretrained document layout parsing, OCR, reading-order recovery, and table recognition produce one **`.md` Markdown file for each document**. We pass that file's UTF-8 contents directly to Qwen3.5, followed by the original question. Unlike coordinate JSON, Markdown can represent tables as rows/columns. No parser JSON or image pixels are sent to Qwen; figures/embedded images referenced by Markdown are not independently loaded by our LM.
+
+```text
+image → PP-StructureV3 (.venv-ppstructure) → <document-key>.md
+      → Qwen3.5-9B (.venv) → predictions → official KIE F1
+```
+
+PP-StructureV3 can employ its **own OCR recognition models**, so this is a comparison of complete extraction architectures rather than a pure coordinate-only ablation. The CPU collector records separate OCR and LM times, and existing baselines are not modified.
 
 
 ## Quick start: install on Helix
@@ -45,15 +55,16 @@ cd ULM-Project-Extractor-VLM-OCRLM
 
 For an existing checkout, use `cd ~/ULM-Project-Extractor-VLM-OCRLM` followed by `git pull --ff-only origin main`. Do not recreate working virtual environments or delete `runs/` when updating the code.
 
-### 2. Install three isolated Python environments
+### 2. Install four isolated Python environments
 
 **Never install PaddlePaddle GPU into the PyTorch `.venv`.** On Helix, the frameworks require incompatible CUDA 13 cuDNN/NCCL dependency versions.
 
 | Environment | Purpose | Packages |
 | --- | --- | --- |
-| `.venv` | All VLM, flat OCR + LM, and LA OCR + LM **language-model** jobs; CLI and scoring | PyTorch 2.14.1+cu130, Torchvision, Transformers |
+| `.venv` | **All** VLM and OCR→LM language-model jobs, CLI and scoring | PyTorch 2.14.1+cu130, Torchvision, Transformers |
 | `.venv-ocr` | Existing shared **flat-text** OCR worker | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.2 |
-| `.venv-la-ocr` | New **layout-JSON** OCR worker | Same pretrained PaddlePaddle/PaddleOCR versions, installed independently |
+| `.venv-la-ocr` | Existing **coordinate-JSON** OCR worker | Same pretrained PaddlePaddle/PaddleOCR versions, installed independently |
+| `.venv-ppstructure` | New **PP-StructureV3 Markdown** document parser | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0 with `doc-parser` extra, PaddleX 3.7.2 |
 
 Create/install **PyTorch/LM**:
 
@@ -80,7 +91,15 @@ test -x .venv-la-ocr/bin/python || /usr/bin/python3.12 -m venv .venv-la-ocr
 .venv-la-ocr/bin/python -m pip install -r requirements/helix-paddle-cu130.txt
 ```
 
-This mode retains PP-OCRv6 bounding boxes; no PP-StructureV3 or training dependencies are needed. Each OCR worker is executed in a separate SLURM GPU job. Use the environment-specific `python -m pip` commands, not system-wide `pip`. Initial GPU package and OCR weight downloads can be large.
+Create/install **PP-StructureV3** into a *fourth*, independent Paddle environment. No training or new model weights are needed beyond the pretrained downloads:
+
+```bash
+test -x .venv-ppstructure/bin/python || /usr/bin/python3.12 -m venv .venv-ppstructure
+.venv-ppstructure/bin/python -m pip install -e '.[ppstructure]'
+.venv-ppstructure/bin/python -m pip install -r requirements/helix-paddle-cu130.txt
+```
+
+The `[ppstructure]` extra is defined in `pyproject.toml`: it installs `paddleocr[doc-parser]==3.7.0` and `paddlex==3.7.2`. Installing the cu130 requirements **last** ensures the GPU PaddlePaddle wheel is used. Use each environment's own `python -m pip`, not the system `pip`, and never mix Paddle GPU with `.venv`. Initial parser weights and CUDA package downloads can be substantial. Each extraction engine runs in its own SLURM GPU job.
 
 ### 3. Prepare OCRBench v2
 
@@ -145,6 +164,7 @@ First check package versions and environment separation on the login node:
 .venv/bin/python -m pip check
 .venv-ocr/bin/python -m pip check
 .venv-la-ocr/bin/python -m pip check
+.venv-ppstructure/bin/python -m pip check
 .venv/bin/python scripts/check_dependencies.py --stage all
 .venv/bin/python -m unittest discover -s tests -v
 ```
@@ -159,6 +179,8 @@ sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}
   slurm/check_environment.sbatch paddle
 sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
   slurm/check_environment.sbatch la-paddle
+sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
+  slurm/check_environment.sbatch pp-paddle
 ```
 
 Each submission prints a Slurm job ID. Inspect jobs and logs (replace the example ID):
@@ -188,7 +210,15 @@ test -n "$IMAGE" && sbatch --gres="gpu:${GPU_TYPE}:1" \
   slurm/check_environment.sbatch la-ocr "$IMAGE"
 ```
 
-The corresponding logs must end with `PaddleOCR single-image inference: PASSED` and `PaddleOCR layout single-image inference: PASSED`. The layout log also prints a sample JSON line with `bbox` and `confidence`. The first GPU run may download OCR model weights. For an optional one-document Qwen smoke test:
+Run a **real PP-StructureV3 one-image Markdown smoke test** on an allocated GPU:
+
+```bash
+test -n "$IMAGE" && sbatch --mem=64G --time=00:45:00 \
+  --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
+  slurm/check_environment.sbatch ppstructure "$IMAGE"
+```
+
+Check `gpu-check-<JOBID>.out` for `PP-StructureV3 Markdown single-image inference: PASSED` and a Markdown preview. The flat OCR and coordinate-JSON logs should respectively end with `PaddleOCR single-image inference: PASSED` and `PaddleOCR layout single-image inference: PASSED`. For an optional one-document Qwen smoke test:
 
 ```bash
 sbatch --mem=64G --time=00:45:00 \
@@ -198,38 +228,38 @@ sbatch --mem=64G --time=00:45:00 \
 
 ## Run a new benchmark
 
-Only start a **new** batch when you intend to run the selected experiments again. This creates new batch/run IDs and schedules GPU jobs.
+**Recommended: run just the new full 400-document PP-StructureV3 → Qwen3.5 experiment.** This does not resubmit the previously completed VLM, flat OCR or coordinate-JSON experiments. Use [`model-ppstructure.yml`](model-ppstructure.yml). `model-laocr.yml` is still available to run only the earlier coordinate-JSON experiment. The full [`model.yml`](model.yml) includes **all six** configurations and should be used only for a fresh matched-hardware comparison.
 
-To run **only the new layout-aware Qwen3.5 experiment**, use `model-laocr.yml`. This is preferable when comparing it with the already completed four experiments, because using `model.yml` now launches **all five** configurations again. Comparing across batches is informative, but match GPU type and settings before drawing conclusions about speed.
-
-Use the `GPU_TYPE` and `EN_PART` variables from the installation steps. Preview the 400-document input and SLURM plan **without scheduling jobs**:
+Use the `EN_PART` and `GPU_TYPE` variables from the installation steps. Preview the *full* 400-document schedule (does not submit anything):
 
 ```bash
 .venv/bin/extractor benchmark \
   --input "$EN_PART" \
-  --models model-laocr.yml \
+  --models model-ppstructure.yml \
   --partition gpu-single \
   --gres "gpu:${GPU_TYPE}:1" \
   --gpu-family "$GPU_TYPE" \
+  --time 04:00:00 \
   --dry-run
 ```
 
-After checking the plan and completing the smoke tests, submit the **new** batch:
+After checking the preview and confirming the PP-StructureV3 GPU smoke test, submit the *full* run by omitting `--dry-run`:
 
 ```bash
 .venv/bin/extractor benchmark \
   --input "$EN_PART" \
-  --models model-laocr.yml \
+  --models model-ppstructure.yml \
   --partition gpu-single \
   --gres "gpu:${GPU_TYPE}:1" \
-  --gpu-family "$GPU_TYPE"
+  --gpu-family "$GPU_TYPE" \
+  --time 04:00:00
 ```
 
-To run **all five** experiments together on matched hardware, change `--models model-laocr.yml` to `--models model.yml` in both commands.
+`--time 04:00:00` provides extra scheduling headroom for parser-model initialization and full-document parsing, rather than restricting the experiment to a subset. Adjust it if cluster wall-time limits require; the CLI default is 2 hours. GPU workers use 4 CPUs and 64 GiB RAM by default; the final collector runs on `cpu-single`. Override with the CLI resource flags if necessary.
 
-By default, GPU jobs use four CPUs, 64 GiB system RAM, and two hours; the collector uses `cpu-single`. Without explicit GPU flags, the CLI defaults to A100; the commands above use your chosen GPU instead. Customize resources through the CLI options if needed (`.venv/bin/extractor benchmark --help`). The official evaluator defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; `--evaluator PATH` overrides it.
+The new schedule is **PP-StructureV3 parser job (`.venv-ppstructure`) → Qwen3.5 worker (`.venv`) → CPU scoring**. When running `model.yml`, flat and coordinate OCR engines also get their own jobs, each with an independent cache. Dependencies use `afterany` so logs and failure summaries are produced even if parsing fails: always inspect the parser job before retrying inference.
 
-The schedule is: **flat PaddleOCR → flat OCR+LM workers** and **layout PaddleOCR → LA OCR+LM worker**, alongside any direct VLM workers, followed by a CPU collector. Each OCR cache is independent. Dependencies use `afterany` so downstream logs and failure summaries are still generated if a preceding job fails. An OCR + LM job may therefore fail when OCR did not create the required cache; inspect the OCR job first.
+The scorer defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; pass `--evaluator PATH` if your upstream checkout differs.
 
 ## Monitor runs and read results
 
@@ -258,6 +288,9 @@ runs/
     logs/                     # batch and resume job logs
     ocr/paddleocr/            # original flat OCR text/timing cache
     ocr/paddleocr_layout/     # coordinate-aware JSON text/timing cache
+    ocr/ppstructurev3/        # structured Markdown cache, one .md per document
+      index.json              # parser settings, versions, timing, document keys
+      markdown/<key>.md       # exact UTF-8 content fed into Qwen
     benchmark_summary.csv
   benchmark_summary.csv
 ```
@@ -282,7 +315,7 @@ BATCH="$PWD/runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/batch.json"
 .venv/bin/extractor resume --batch "$BATCH" --ocr-only
 ```
 
-`--ocr-only` **never resubmits direct VLM jobs**. For batches containing LA OCR, it also resumes incomplete `la_ocr_lm` runs, using their separate layout cache. It can reuse completed OCR cache documents and saves the retry job IDs in `runs/batches/<batch-id>/resumes/`. The CPU collector reuses existing scored predictions.
+`--ocr-only` **never resubmits direct VLM jobs**. For batches containing LA OCR or PP-StructureV3, it resumes unfinished `la_ocr_lm` or `ppstructure_lm` runs with their separate per-engine caches. It can reuse completed OCR cache documents and saves the retry job IDs in `runs/batches/<batch-id>/resumes/`. The CPU collector reuses existing scored predictions.
 
 If inference finished but scoring failed, inspect `runs/<run-id>/scoring.log` and repair the evaluator dependencies before submitting a **CPU-only** collector; there is no need to rerun GPU inference:
 
@@ -299,13 +332,16 @@ sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \
 | --- | --- |
 | Home directory inaccessible or `squeue` fails with DNS configuration errors | Cluster/storage/Slurm issue; check Helix notices/support. Do **not** recreate your home directory. |
 | `torch` reports package version `2.14.1` instead of `2.14.1+cu130` | Use the updated checker, which verifies `torch.__version__`. Check `torch.version.cuda` before reinstalling. |
-| `torch` and PaddlePaddle conflict on cuDNN/NCCL | Keep separate `.venv` and `.venv-ocr`. If Paddle was accidentally installed in `.venv`, uninstall `paddlepaddle-gpu paddleocr paddlex` **there**, then install `requirements/helix-torch-repair-cu130.txt` and recheck `pip check`. |
+| `torch` and PaddlePaddle conflict on cuDNN/NCCL | Keep `.venv` separate from **all three Paddle environments**. If Paddle was accidentally installed in `.venv`, uninstall `paddlepaddle-gpu paddleocr paddlex` **there**, then install `requirements/helix-torch-repair-cu130.txt` and recheck `pip check`. |
 | `libcuda.so.1` missing when importing Paddle on a login node | Expected on nodes without NVIDIA driver libraries; run the GPU smoke test via `sbatch`. If it also fails on an allocated A100, inspect the log. |
 | `ModuleNotFoundError: torchvision` | Install `requirements/helix-pytorch-cu130.txt` and `-e '.[vlm]'` in `.venv`. |
 | `No module named paddleocr` / missing Paddle backend | Install `-e '.[ocr]'` and `requirements/helix-paddle-cu130.txt` in `.venv-ocr`, not `.venv`. |
 | OCR model download stalls | Inspect the OCR Slurm log and the model cache. `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` skips the host connectivity check, but **does not replace missing model weights**. |
 | OCR + LM cannot find `ocr/paddleocr/index.json` | Inspect the shared flat OCR job; its failure commonly prevents the cache from being created. |
 | LA OCR + LM cannot find `ocr/paddleocr_layout/index.json` | Verify `.venv-la-ocr`, inspect the `ulm-la-ocr` Slurm job, and run the `la-ocr` one-image smoke test. |
+| PP-StructureV3 imports fail or doc parsing features are missing | Check `.venv-ppstructure/bin/python -m pip check`, ensure `-e '.[ppstructure]'` installed `paddleocr[doc-parser]`, and run the `ppstructure` GPU smoke test. |
+| PP-StructureV3 Markdown cache is missing/incomplete | Inspect the `ulm-ppstructure` job log and `runs/batches/<batch-id>/ocr/ppstructurev3/index.json`; incomplete documents are resumable. |
+| PP-StructureV3 produces empty Markdown | Check that image/parser output; the job rejects empty Markdown rather than passing an empty prompt to Qwen. |
 | Scoring fails after predictions were saved | Inspect `runs/<run-id>/scoring.log`. The English KIE evaluator requirements omit `Polygon3`; rerun the CPU collector rather than GPU inference. |
 
 ## References
@@ -315,3 +351,5 @@ sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \
 - [PyTorch CUDA 13.0 wheels](https://download.pytorch.org/whl/cu130/)
 - [PaddlePaddle GPU installation](https://github.com/PaddlePaddle/docs/blob/develop/docs/install/pip/linux-pip_en.md)
 - [PaddleOCR 3.x output fields: rec_texts, rec_scores and rec_boxes](https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/pipeline_usage/OCR.en.md)
+- [PP-StructureV3 official usage and Markdown API](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PP-StructureV3.html)
+- [PaddleOCR optional `doc-parser` installation](https://www.paddleocr.ai/latest/en/version3.x/installation.html)
