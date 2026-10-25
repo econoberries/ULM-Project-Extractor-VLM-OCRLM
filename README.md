@@ -2,7 +2,7 @@
 
 Compare **direct vision-language models (VLMs)** with **PaddleOCR → language model (OCR + LM)** pipelines for key information extraction (KIE) from document images. The benchmark uses the **400 English KIE examples from OCRBench v2**, scores predictions with the official evaluator, and records accuracy, latency, and computational-resource measurements.
 
-The repository targets **bwForCluster Helix** (SLURM, NVIDIA A100, Python 3.12, CUDA 13.0). It can serve as a starting point for other clusters, but its CUDA wheels and SLURM settings are Helix-specific.
+The repository targets **bwForCluster Helix** (SLURM, NVIDIA A100/H200, Python 3.12, CUDA 13.0). It can serve as a starting point for other clusters, but its CUDA wheels and SLURM settings are Helix-specific. Select a GPU family explicitly when launching tests or benchmarks; see [GPU selection](#choose-your-gpu-a100-h200-or-h100-where-available).
 
 ## Experiments
 
@@ -96,11 +96,14 @@ First check package versions and environment separation on the login node:
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-**Important:** Helix login nodes may not expose `libcuda.so.1`. The dependency checker then prints `DEFERRED import paddle`: that is expected and is **not proof GPU inference works**. Verify both runtimes on an allocated A100:
+**Important:** Helix login nodes may not expose `libcuda.so.1`. The dependency checker then prints `DEFERRED import paddle`: that is expected and is **not proof GPU inference works**. Choose a GPU family (`A100` by default, or `H200` on Helix) and verify both runtimes on an allocated GPU:
 
 ```bash
-sbatch slurm/check_environment.sbatch torch
-sbatch slurm/check_environment.sbatch paddle
+export GPU_TYPE=A100   # Change to H200 to request a Helix H200
+sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
+  slurm/check_environment.sbatch torch
+sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
+  slurm/check_environment.sbatch paddle
 ```
 
 Each submission prints a Slurm job ID. Inspect jobs and logs (replace the example ID):
@@ -117,21 +120,73 @@ Then test a single image with the same PaddleOCR constructor used by the benchma
 
 ```bash
 IMAGE="$(find "$EN_PART" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit)"
-test -n "$IMAGE" && sbatch slurm/check_environment.sbatch ocr "$IMAGE"
+test -n "$IMAGE" && sbatch --gres="gpu:${GPU_TYPE}:1" \
+  --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
+  slurm/check_environment.sbatch ocr "$IMAGE"
 ```
 
 The output log must end with `PaddleOCR single-image inference: PASSED`. The first run may download PaddleOCR model weights. For an optional one-document Qwen smoke test:
 
 ```bash
 sbatch --mem=64G --time=00:45:00 \
+  --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
   slurm/check_environment.sbatch model "$EN_PART" qwen35_vlm
 ```
+
+## Choose your GPU: A100, H200, or H100 where available
+
+**Helix currently documents A100 (40/80 GB) and H200 (141 GB), not H100.** See the [Helix hardware inventory](https://wiki.bwhpc.de/e/Helix/Hardware) and [Slurm GPU request guide](https://wiki.bwhpc.de/e/Helix/Slurm). A cluster with an H100 GRES can use the same selection mechanism, but do **not** request H100 on Helix unless its live Slurm configuration lists it.
+
+| GPU family | Slurm GRES for one GPU | Helix status |
+| --- | --- | --- |
+| A100 | `gpu:A100:1` | Listed (40 GB and 80 GB variants) |
+| H200 | `gpu:H200:1` | Listed (141 GB) |
+| H100 | `gpu:H100:1` | Not listed; only use where supported |
+
+Check the live Slurm GPU types and idle availability **on the cluster**:
+
+```bash
+sinfo -N -o '%N %G' | grep -E 'A100|H100|H200'
+sinfo_t_idle
+```
+
+Choose one family for the **entire new benchmark batch**:
+
+```bash
+export GPU_TYPE=A100  # Helix: A100 or H200; H100 only if your cluster lists it
+```
+
+The GPU smoke tests in step 4 use `--gres="gpu:${GPU_TYPE}:1"` to request that type and `--export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}"` to check the allocated GPU against it. `slurm/check_environment.sbatch` defaults to A100 if neither is provided. Its printed `nvidia-smi` output records the **actual GPU name and memory**.
+
+To run a **new benchmark on the selected GPU family**, pass **both** flags:
+
+```bash
+.venv/bin/extractor benchmark \
+  --input "$EN_PART" --models model.yml \
+  --partition gpu-single \
+  --gres "gpu:${GPU_TYPE}:1" \
+  --gpu-family "$GPU_TYPE" \
+  --dry-run
+
+# After reviewing the plan and passing GPU smoke tests:
+.venv/bin/extractor benchmark \
+  --input "$EN_PART" --models model.yml \
+  --partition gpu-single \
+  --gres "gpu:${GPU_TYPE}:1" \
+  --gpu-family "$GPU_TYPE"
+```
+
+`--gres` requests the physical GPU via Slurm; `--gpu-family` ensures the worker checks its name and stores the expected family with the batch. The `gpu-single` partition accepts both A100 and H200 requests on Helix.
+
+**Existing batches:** GPU family is recorded in `batch.json`. The `resume` CLI uses that stored family, not a new `--gpu-family` flag. Keep this project's existing batch on A100 when resuming with `--ocr-only`; do not switch its `--gres` to H200/H100. For a different family, submit a **new batch** after testing the GPU and model compatibility.
+
+**Benchmark interpretation:** the A100 request does not specify 40 GB vs 80 GB. Record the actual device and VRAM from every job (`nvidia-smi` and run metadata) and keep hardware consistent when comparing latencies or memory use.
 
 ## Run a new benchmark
 
 Only start a **new** batch when you intend to run the selected experiments again. This creates new batch/run IDs and schedules GPU jobs.
 
-Preview the 400-document input and Slurm submission plan **without scheduling jobs**:
+Preview the 400-document input and Slurm submission plan **without scheduling jobs** (defaults to A100; see [GPU selection](#choose-your-gpu-a100-h200-or-h100-where-available) for A100/H200/H100 flags):
 
 ```bash
 .venv/bin/extractor benchmark \
@@ -148,7 +203,7 @@ After checking the plan and completing the smoke tests, submit:
   --models model.yml
 ```
 
-By default, GPU jobs request `gpu-single`, one A100, four CPUs, 64 GiB RAM and two hours; the collector uses `cpu-single`. Customize partition/resources through the CLI options if needed (`.venv/bin/extractor benchmark --help`). The official evaluator defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; `--evaluator PATH` overrides it.
+By default, GPU jobs request `gpu-single`, one A100, four CPUs, 64 GiB RAM and two hours; the collector uses `cpu-single`. For H200 (or another supported family), pass **both** `--gres` and `--gpu-family` as shown above. Customize resources through the CLI options if needed (`.venv/bin/extractor benchmark --help`). The official evaluator defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; `--evaluator PATH` overrides it.
 
 The schedule is: **shared PaddleOCR (if needed) → OCR + LM workers**, alongside direct VLM workers, followed by a CPU collector. Dependencies use `afterany` so downstream logs and failure summaries are still generated if a preceding job fails. An OCR + LM job may therefore fail when OCR did not create the required cache; inspect the OCR job first.
 
@@ -188,7 +243,7 @@ Each summary row identifies one model run, its status, completed document count,
 
 **Do not call `benchmark` again merely to repair or finish an existing run.** `resume` preserves the original batch and run IDs, existing predictions and scored VLM outputs; it only schedules unfinished work.
 
-**Before resuming**, check `squeue -u "$USER"` and the relevant Slurm job states with `sacct`. Never submit a second worker for a run that is still queued or running.
+**Before resuming**, check `squeue -u "$USER"` and the relevant Slurm job states with `sacct`. Never submit a second worker for a run that is still queued or running. This project's original batch was created for **A100**: keep that GPU family for resumes, even if you later benchmark H200 in a new batch.
 
 For this project's existing batch (ID `5dd8a6af-de7f-4d4c-b496-44068933a072`), the OCR-only recovery command is:
 
