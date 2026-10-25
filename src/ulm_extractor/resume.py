@@ -43,9 +43,9 @@ def _ocr_cache_complete(batch, documents, engine="paddleocr"):
         raise ValueError("Existing layout OCR cache has an incompatible format")
     if engine == "ppstructurev3":
         from .ppstructure import FORMAT, SETTINGS, RECOVERY, FALLBACK_SETTINGS
-        if index.get("format") != FORMAT or index.get("settings") != SETTINGS or
+        if (index.get("format") != FORMAT or index.get("settings") != SETTINGS or
                     index.get("recovery") != RECOVERY or
-                    index.get("fallback_settings") != FALLBACK_SETTINGS:
+                    index.get("fallback_settings") != FALLBACK_SETTINGS):
             raise ValueError("Existing PP-StructureV3 cache format/settings mismatch")
     # The resume CLI runs from .venv (PyTorch), but the OCR model runs
     # exclusively from .venv-ocr. Check the *correct* PaddleOCR installation.
