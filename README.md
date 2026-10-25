@@ -2,7 +2,7 @@
 
 Compare **direct vision-language models (VLMs)** with **PaddleOCR → language model (OCR + LM)** pipelines for key information extraction (KIE) from document images. The benchmark uses the **400 English KIE examples from OCRBench v2**, scores predictions with the official evaluator, and records accuracy, latency, and computational-resource measurements.
 
-The repository targets **bwForCluster Helix** (SLURM, NVIDIA A100/H200, Python 3.12, CUDA 13.0). It can serve as a starting point for other clusters, but its CUDA wheels and SLURM settings are Helix-specific. Select a GPU family explicitly when launching tests or benchmarks; see [GPU selection](#choose-your-gpu-a100-h200-or-h100-where-available).
+The repository targets **bwForCluster Helix** (SLURM, NVIDIA A100/H200, Python 3.12, CUDA 13.0). It can serve as a starting point for other clusters, but its CUDA wheels and SLURM settings are Helix-specific. Select a GPU family explicitly when launching tests or benchmarks; see [GPU selection](#4-choose-a-gpu-a100-h200-or-h100-where-available).
 
 ## Experiments
 
@@ -85,7 +85,38 @@ test -d "$EN_PART" || echo "Set EN_PART to the actual OCRBench_v2/EN_part path"
 
 The included `requirements/ocrbench-v2-kie-eval.txt` covers **English KIE scoring only**; it intentionally omits the `Polygon3` extension used for other OCRBench tasks. Keep the upstream evaluation code unchanged. For reproducibility, record the upstream evaluator commit (the project's reference commit is `4e363b3f499811b43d792ef0bb33932ef05eca27`).
 
-### 4. Verify installation and GPU access
+### 4. Choose a GPU: A100, H200, or H100 where available
+
+**Helix currently documents A100 (40/80 GB) and H200 (141 GB), not H100.** See the [Helix hardware inventory](https://wiki.bwhpc.de/e/Helix/Hardware) and [Slurm GPU request guide](https://wiki.bwhpc.de/e/Helix/Slurm). A cluster with an H100 GRES can use the same selection mechanism, but do **not** request H100 on Helix unless its live Slurm configuration lists it.
+
+| GPU family | Slurm GRES for one GPU | Helix status |
+| --- | --- | --- |
+| A100 | `gpu:A100:1` | Listed (40 GB and 80 GB variants) |
+| H200 | `gpu:H200:1` | Listed (141 GB) |
+| H100 | `gpu:H100:1` | Not listed; only use where supported |
+
+Check the live Slurm GPU types and idle availability **on the cluster**:
+
+```bash
+sinfo -N -o '%N %G' | grep -E 'A100|H100|H200'
+sinfo_t_idle
+```
+
+Choose one family for the **entire new benchmark batch**:
+
+```bash
+export GPU_TYPE=A100  # Helix: A100 or H200; H100 only if your cluster lists it
+```
+
+The GPU smoke tests in step 5 use `--gres="gpu:${GPU_TYPE}:1"` to request that type and `--export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}"` to check the allocated GPU against it. `slurm/check_environment.sbatch` defaults to A100 if neither is provided. Its printed `nvidia-smi` output records the **actual GPU name and memory**.
+
+When creating a new batch, the `benchmark` commands below take **both** `--gres "gpu:${GPU_TYPE}:1"` (Slurm's physical GPU request) and `--gpu-family "$GPU_TYPE"` (the worker's GPU-family verification and batch metadata). Helix's `gpu-single` partition supports the listed A100 and H200 requests.
+
+**Existing batches:** GPU family is recorded in `batch.json`. The `resume` CLI uses that stored family, not a new `--gpu-family` flag. Keep this project's existing batch on A100 when resuming with `--ocr-only`; do not switch its `--gres` to H200/H100. For a different family, submit a **new batch** after testing the GPU and model compatibility.
+
+**Benchmark interpretation:** the A100 request does not specify 40 GB vs 80 GB. Record the actual device and VRAM from every job (`nvidia-smi` and run metadata) and keep hardware consistent when comparing latencies or memory use.
+
+### 5. Verify installation and GPU access
 
 First check package versions and environment separation on the login node:
 
@@ -133,77 +164,34 @@ sbatch --mem=64G --time=00:45:00 \
   slurm/check_environment.sbatch model "$EN_PART" qwen35_vlm
 ```
 
-## Choose your GPU: A100, H200, or H100 where available
-
-**Helix currently documents A100 (40/80 GB) and H200 (141 GB), not H100.** See the [Helix hardware inventory](https://wiki.bwhpc.de/e/Helix/Hardware) and [Slurm GPU request guide](https://wiki.bwhpc.de/e/Helix/Slurm). A cluster with an H100 GRES can use the same selection mechanism, but do **not** request H100 on Helix unless its live Slurm configuration lists it.
-
-| GPU family | Slurm GRES for one GPU | Helix status |
-| --- | --- | --- |
-| A100 | `gpu:A100:1` | Listed (40 GB and 80 GB variants) |
-| H200 | `gpu:H200:1` | Listed (141 GB) |
-| H100 | `gpu:H100:1` | Not listed; only use where supported |
-
-Check the live Slurm GPU types and idle availability **on the cluster**:
-
-```bash
-sinfo -N -o '%N %G' | grep -E 'A100|H100|H200'
-sinfo_t_idle
-```
-
-Choose one family for the **entire new benchmark batch**:
-
-```bash
-export GPU_TYPE=A100  # Helix: A100 or H200; H100 only if your cluster lists it
-```
-
-The GPU smoke tests in step 4 use `--gres="gpu:${GPU_TYPE}:1"` to request that type and `--export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}"` to check the allocated GPU against it. `slurm/check_environment.sbatch` defaults to A100 if neither is provided. Its printed `nvidia-smi` output records the **actual GPU name and memory**.
-
-To run a **new benchmark on the selected GPU family**, pass **both** flags:
-
-```bash
-.venv/bin/extractor benchmark \
-  --input "$EN_PART" --models model.yml \
-  --partition gpu-single \
-  --gres "gpu:${GPU_TYPE}:1" \
-  --gpu-family "$GPU_TYPE" \
-  --dry-run
-
-# After reviewing the plan and passing GPU smoke tests:
-.venv/bin/extractor benchmark \
-  --input "$EN_PART" --models model.yml \
-  --partition gpu-single \
-  --gres "gpu:${GPU_TYPE}:1" \
-  --gpu-family "$GPU_TYPE"
-```
-
-`--gres` requests the physical GPU via Slurm; `--gpu-family` ensures the worker checks its name and stores the expected family with the batch. The `gpu-single` partition accepts both A100 and H200 requests on Helix.
-
-**Existing batches:** GPU family is recorded in `batch.json`. The `resume` CLI uses that stored family, not a new `--gpu-family` flag. Keep this project's existing batch on A100 when resuming with `--ocr-only`; do not switch its `--gres` to H200/H100. For a different family, submit a **new batch** after testing the GPU and model compatibility.
-
-**Benchmark interpretation:** the A100 request does not specify 40 GB vs 80 GB. Record the actual device and VRAM from every job (`nvidia-smi` and run metadata) and keep hardware consistent when comparing latencies or memory use.
-
 ## Run a new benchmark
 
 Only start a **new** batch when you intend to run the selected experiments again. This creates new batch/run IDs and schedules GPU jobs.
 
-Preview the 400-document input and Slurm submission plan **without scheduling jobs** (defaults to A100; see [GPU selection](#choose-your-gpu-a100-h200-or-h100-where-available) for A100/H200/H100 flags):
+Use the `GPU_TYPE` and `EN_PART` variables from the installation steps. Preview the 400-document input and Slurm plan **without scheduling jobs**:
 
 ```bash
 .venv/bin/extractor benchmark \
   --input "$EN_PART" \
   --models model.yml \
+  --partition gpu-single \
+  --gres "gpu:${GPU_TYPE}:1" \
+  --gpu-family "$GPU_TYPE" \
   --dry-run
 ```
 
-After checking the plan and completing the smoke tests, submit:
+After checking the plan and completing the smoke tests, submit the **new** batch:
 
 ```bash
 .venv/bin/extractor benchmark \
   --input "$EN_PART" \
-  --models model.yml
+  --models model.yml \
+  --partition gpu-single \
+  --gres "gpu:${GPU_TYPE}:1" \
+  --gpu-family "$GPU_TYPE"
 ```
 
-By default, GPU jobs request `gpu-single`, one A100, four CPUs, 64 GiB RAM and two hours; the collector uses `cpu-single`. For H200 (or another supported family), pass **both** `--gres` and `--gpu-family` as shown above. Customize resources through the CLI options if needed (`.venv/bin/extractor benchmark --help`). The official evaluator defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; `--evaluator PATH` overrides it.
+By default, GPU jobs use four CPUs, 64 GiB system RAM, and two hours; the collector uses `cpu-single`. Without explicit GPU flags, the CLI defaults to A100; the commands above use your chosen GPU instead. Customize resources through the CLI options if needed (`.venv/bin/extractor benchmark --help`). The official evaluator defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; `--evaluator PATH` overrides it.
 
 The schedule is: **shared PaddleOCR (if needed) → OCR + LM workers**, alongside direct VLM workers, followed by a CPU collector. Dependencies use `afterany` so downstream logs and failure summaries are still generated if a preceding job fails. An OCR + LM job may therefore fail when OCR did not create the required cache; inspect the OCR job first.
 
