@@ -1,6 +1,6 @@
 # ULM Document Extraction Benchmark
 
-Compare **direct vision-language models (VLMs)**, **flat-text PaddleOCR → LM**, and **layout-aware PaddleOCR JSON → LM** for key information extraction (KIE) from document images. The benchmark uses the **400 English KIE examples from OCRBench v2**, scores predictions with the official evaluator, and records accuracy, latency, and computational-resource measurements.
+Compare **direct VLMs**, **flat-text PaddleOCR → LM**, **coordinate-JSON PaddleOCR → LM**, and **PP-StructureV3 Markdown → LM** for key information extraction (KIE) from document images. The benchmark uses the **400 English KIE examples from OCRBench v2**, scores predictions with the official evaluator, and records accuracy, latency, and computational-resource measurements.
 
 The repository targets **bwForCluster Helix** (SLURM, NVIDIA A100/H200, Python 3.12, CUDA 13.0). It can serve as a starting point for other clusters, but its CUDA wheels and SLURM settings are Helix-specific. Select a GPU family explicitly when launching tests or benchmarks; see [GPU selection](#4-choose-a-gpu-a100-h200-or-h100-where-available).
 
