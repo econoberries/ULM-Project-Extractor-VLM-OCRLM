@@ -1,6 +1,6 @@
 # ULM Document Extraction Benchmark
 
-Compare **direct vision-language models (VLMs)** with **PaddleOCR → language model (OCR + LM)** pipelines for key information extraction (KIE) from document images. The benchmark uses the **400 English KIE examples from OCRBench v2**, scores predictions with the official evaluator, and records accuracy, latency, and computational-resource measurements.
+Compare **direct vision-language models (VLMs)**, **flat-text PaddleOCR → LM**, and **layout-aware PaddleOCR JSON → LM** for key information extraction (KIE) from document images. The benchmark uses the **400 English KIE examples from OCRBench v2**, scores predictions with the official evaluator, and records accuracy, latency, and computational-resource measurements.
 
 The repository targets **bwForCluster Helix** (SLURM, NVIDIA A100/H200, Python 3.12, CUDA 13.0). It can serve as a starting point for other clusters, but its CUDA wheels and SLURM settings are Helix-specific. Select a GPU family explicitly when launching tests or benchmarks; see [GPU selection](#4-choose-a-gpu-a100-h200-or-h100-where-available).
 
@@ -13,9 +13,21 @@ Configure experiments in [`model.yml`](model.yml):
 | `qwen35_vlm` | Image → VLM | Qwen3.5-9B |
 | `minicpm_vlm` | Image → VLM | MiniCPM-V-4.6 |
 | `qwen35_ocr` | Image → PaddleOCR → LM | Qwen3.5-9B |
-| `qwen25_ocr` | Image → PaddleOCR → LM | Qwen2.5-14B-Instruct-1M |
+| `qwen25_ocr` | Image → flat PaddleOCR → LM | Qwen2.5-14B-Instruct-1M |
+| `qwen35_laocr` | Image → layout JSON PaddleOCR → LM | Qwen3.5-9B |
 
-Both OCR + LM experiments reuse the same OCR extraction cache. Each model has its own GPU job, and a CPU collector computes the official scores and writes a comparison CSV. The original OCRBench questions are used without extra output-formatting instructions; the default generation limit is 384 tokens.
+The two **flat OCR + LM** runs share the original `paddleocr` cache. The **layout-aware** run uses a different `paddleocr_layout` cache and a separate OCR environment. All LM models still use `.venv`. The original OCRBench questions are used without rewriting; the default generation limit is 384 tokens.
+
+**What “layout-aware” means here:** we use the **same pretrained PP-OCRv6 text detector/recognizer** as flat OCR. Instead of discarding coordinates, we serialize every `rec_texts` entry together with its `rec_boxes` [x_min, y_min, x_max, y_max] and `rec_scores` into **JSON text**. We include the source image dimensions and send that JSON string followed by the unchanged question to Qwen3.5. This is **coordinate-aware OCR**, not PP-StructureV3 table recognition or a newly trained model.
+
+Example LM input (illustrative):
+
+```json
+{"format":"paddleocr-layout-v1","coordinate_system":"absolute_pixels","box_format":"xyxy","image_size":{"width":1000,"height":800},"lines":[{"text":"Protein","bbox":[50,200,140,222],"confidence":0.99},{"text":"8g","bbox":[650,200,700,222],"confidence":0.98}]}
+```
+
+The benchmark question follows the JSON as plain text. This enables the LM to reason about row/column proximity while keeping the recognizer fixed. Each experiment has its own GPU model job, and the CPU collector uses the official KIE evaluator.
+
 
 ## Quick start: install on Helix
 
@@ -33,14 +45,15 @@ cd ULM-Project-Extractor-VLM-OCRLM
 
 For an existing checkout, use `cd ~/ULM-Project-Extractor-VLM-OCRLM` followed by `git pull --ff-only origin main`. Do not recreate working virtual environments or delete `runs/` when updating the code.
 
-### 2. Install two isolated Python environments
+### 2. Install three isolated Python environments
 
-**Do not put PaddlePaddle GPU and PyTorch in the same environment.** On Helix, their CUDA 13 packages require incompatible cuDNN/NCCL versions.
+**Never install PaddlePaddle GPU into the PyTorch `.venv`.** On Helix, the frameworks require incompatible CUDA 13 cuDNN/NCCL dependency versions.
 
 | Environment | Purpose | Packages |
 | --- | --- | --- |
-| `.venv` | Direct VLMs, OCR + LM model workers, CLI and scoring | PyTorch 2.14.1+cu130, Torchvision, Transformers, evaluator |
-| `.venv-ocr` | Shared OCR worker | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.2 |
+| `.venv` | All VLM, flat OCR + LM, and LA OCR + LM **language-model** jobs; CLI and scoring | PyTorch 2.14.1+cu130, Torchvision, Transformers |
+| `.venv-ocr` | Existing shared **flat-text** OCR worker | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.2 |
+| `.venv-la-ocr` | New **layout-JSON** OCR worker | Same pretrained PaddlePaddle/PaddleOCR versions, installed independently |
 
 Create/install **PyTorch/LM**:
 
@@ -59,7 +72,15 @@ test -x .venv-ocr/bin/python || /usr/bin/python3.12 -m venv .venv-ocr
 .venv-ocr/bin/python -m pip install -r requirements/helix-paddle-cu130.txt
 ```
 
-Use these environment-specific `python -m pip` commands rather than the system-wide `pip` or an activated environment. First-time installations may download large CUDA/model packages.
+Create/install **layout-aware OCR** into a third environment (does not modify existing environments):
+
+```bash
+test -x .venv-la-ocr/bin/python || /usr/bin/python3.12 -m venv .venv-la-ocr
+.venv-la-ocr/bin/python -m pip install -e '.[ocr]'
+.venv-la-ocr/bin/python -m pip install -r requirements/helix-paddle-cu130.txt
+```
+
+This mode retains PP-OCRv6 bounding boxes; no PP-StructureV3 or training dependencies are needed. Each OCR worker is executed in a separate SLURM GPU job. Use the environment-specific `python -m pip` commands, not system-wide `pip`. Initial GPU package and OCR weight downloads can be large.
 
 ### 3. Prepare OCRBench v2
 
@@ -123,6 +144,7 @@ First check package versions and environment separation on the login node:
 ```bash
 .venv/bin/python -m pip check
 .venv-ocr/bin/python -m pip check
+.venv-la-ocr/bin/python -m pip check
 .venv/bin/python scripts/check_dependencies.py --stage all
 .venv/bin/python -m unittest discover -s tests -v
 ```
@@ -135,6 +157,8 @@ sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}
   slurm/check_environment.sbatch torch
 sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
   slurm/check_environment.sbatch paddle
+sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
+  slurm/check_environment.sbatch la-paddle
 ```
 
 Each submission prints a Slurm job ID. Inspect jobs and logs (replace the example ID):
@@ -156,7 +180,15 @@ test -n "$IMAGE" && sbatch --gres="gpu:${GPU_TYPE}:1" \
   slurm/check_environment.sbatch ocr "$IMAGE"
 ```
 
-The output log must end with `PaddleOCR single-image inference: PASSED`. The first run may download PaddleOCR model weights. For an optional one-document Qwen smoke test:
+Also verify a **layout-aware JSON extraction** using the third environment:
+
+```bash
+test -n "$IMAGE" && sbatch --gres="gpu:${GPU_TYPE}:1" \
+  --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
+  slurm/check_environment.sbatch la-ocr "$IMAGE"
+```
+
+The corresponding logs must end with `PaddleOCR single-image inference: PASSED` and `PaddleOCR layout single-image inference: PASSED`. The layout log also prints a sample JSON line with `bbox` and `confidence`. The first GPU run may download OCR model weights. For an optional one-document Qwen smoke test:
 
 ```bash
 sbatch --mem=64G --time=00:45:00 \
@@ -168,12 +200,14 @@ sbatch --mem=64G --time=00:45:00 \
 
 Only start a **new** batch when you intend to run the selected experiments again. This creates new batch/run IDs and schedules GPU jobs.
 
-Use the `GPU_TYPE` and `EN_PART` variables from the installation steps. Preview the 400-document input and Slurm plan **without scheduling jobs**:
+To run **only the new layout-aware Qwen3.5 experiment**, use `model-laocr.yml`. This is preferable when comparing it with the already completed four experiments, because using `model.yml` now launches **all five** configurations again. Comparing across batches is informative, but match GPU type and settings before drawing conclusions about speed.
+
+Use the `GPU_TYPE` and `EN_PART` variables from the installation steps. Preview the 400-document input and SLURM plan **without scheduling jobs**:
 
 ```bash
 .venv/bin/extractor benchmark \
   --input "$EN_PART" \
-  --models model.yml \
+  --models model-laocr.yml \
   --partition gpu-single \
   --gres "gpu:${GPU_TYPE}:1" \
   --gpu-family "$GPU_TYPE" \
@@ -185,15 +219,17 @@ After checking the plan and completing the smoke tests, submit the **new** batch
 ```bash
 .venv/bin/extractor benchmark \
   --input "$EN_PART" \
-  --models model.yml \
+  --models model-laocr.yml \
   --partition gpu-single \
   --gres "gpu:${GPU_TYPE}:1" \
   --gpu-family "$GPU_TYPE"
 ```
 
+To run **all five** experiments together on matched hardware, change `--models model-laocr.yml` to `--models model.yml` in both commands.
+
 By default, GPU jobs use four CPUs, 64 GiB system RAM, and two hours; the collector uses `cpu-single`. Without explicit GPU flags, the CLI defaults to A100; the commands above use your chosen GPU instead. Customize resources through the CLI options if needed (`.venv/bin/extractor benchmark --help`). The official evaluator defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; `--evaluator PATH` overrides it.
 
-The schedule is: **shared PaddleOCR (if needed) → OCR + LM workers**, alongside direct VLM workers, followed by a CPU collector. Dependencies use `afterany` so downstream logs and failure summaries are still generated if a preceding job fails. An OCR + LM job may therefore fail when OCR did not create the required cache; inspect the OCR job first.
+The schedule is: **flat PaddleOCR → flat OCR+LM workers** and **layout PaddleOCR → LA OCR+LM worker**, alongside any direct VLM workers, followed by a CPU collector. Each OCR cache is independent. Dependencies use `afterany` so downstream logs and failure summaries are still generated if a preceding job fails. An OCR + LM job may therefore fail when OCR did not create the required cache; inspect the OCR job first.
 
 ## Monitor runs and read results
 
@@ -220,7 +256,8 @@ runs/
     jobs.json                 # initial Slurm jobs
     resumes/                  # subsequent resume job records
     logs/                     # batch and resume job logs
-    ocr/paddleocr/            # shared OCR text and timing cache
+    ocr/paddleocr/            # original flat OCR text/timing cache
+    ocr/paddleocr_layout/     # coordinate-aware JSON text/timing cache
     benchmark_summary.csv
   benchmark_summary.csv
 ```
@@ -245,7 +282,7 @@ BATCH="$PWD/runs/batches/5dd8a6af-de7f-4d4c-b496-44068933a072/batch.json"
 .venv/bin/extractor resume --batch "$BATCH" --ocr-only
 ```
 
-`--ocr-only` **never resubmits direct VLM jobs**. It can reuse completed OCR cache documents and saves the retry job IDs in `runs/batches/<batch-id>/resumes/`. The CPU collector reuses existing scored predictions.
+`--ocr-only` **never resubmits direct VLM jobs**. For batches containing LA OCR, it also resumes incomplete `la_ocr_lm` runs, using their separate layout cache. It can reuse completed OCR cache documents and saves the retry job IDs in `runs/batches/<batch-id>/resumes/`. The CPU collector reuses existing scored predictions.
 
 If inference finished but scoring failed, inspect `runs/<run-id>/scoring.log` and repair the evaluator dependencies before submitting a **CPU-only** collector; there is no need to rerun GPU inference:
 
@@ -267,7 +304,8 @@ sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \
 | `ModuleNotFoundError: torchvision` | Install `requirements/helix-pytorch-cu130.txt` and `-e '.[vlm]'` in `.venv`. |
 | `No module named paddleocr` / missing Paddle backend | Install `-e '.[ocr]'` and `requirements/helix-paddle-cu130.txt` in `.venv-ocr`, not `.venv`. |
 | OCR model download stalls | Inspect the OCR Slurm log and the model cache. `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` skips the host connectivity check, but **does not replace missing model weights**. |
-| OCR + LM cannot find `ocr/paddleocr/index.json` | Inspect the shared PaddleOCR job; its failure commonly prevents the cache from being created. |
+| OCR + LM cannot find `ocr/paddleocr/index.json` | Inspect the shared flat OCR job; its failure commonly prevents the cache from being created. |
+| LA OCR + LM cannot find `ocr/paddleocr_layout/index.json` | Verify `.venv-la-ocr`, inspect the `ulm-la-ocr` Slurm job, and run the `la-ocr` one-image smoke test. |
 | Scoring fails after predictions were saved | Inspect `runs/<run-id>/scoring.log`. The English KIE evaluator requirements omit `Polygon3`; rerun the CPU collector rather than GPU inference. |
 
 ## References
@@ -276,3 +314,4 @@ sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \
 - [OCRBench v2 paper](https://proceedings.neurips.cc/paper_files/paper/2025/hash/8c2e6bb15be1894b8fb4e0f9bcad1739-Abstract-Datasets_and_Benchmarks_Track.html)
 - [PyTorch CUDA 13.0 wheels](https://download.pytorch.org/whl/cu130/)
 - [PaddlePaddle GPU installation](https://github.com/PaddlePaddle/docs/blob/develop/docs/install/pip/linux-pip_en.md)
+- [PaddleOCR 3.x output fields: rec_texts, rec_scores and rec_boxes](https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/pipeline_usage/OCR.en.md)
