@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from ulm_extractor.config import load_config
-from ulm_extractor.ppstructure import FORMAT, SETTINGS, extract_markdown, run_ppstructure
+from ulm_extractor.ppstructure import FORMAT, SETTINGS, RECOVERY, FALLBACK_SETTINGS, extract_markdown, run_ppstructure
 from ulm_extractor.resume import _ocr_cache_complete
 from ulm_extractor.scheduler import submit_batch
 from ulm_extractor.storage import key_for, read_json, write_json
@@ -54,16 +54,32 @@ class PPStructureContracts(unittest.TestCase):
                 "image_directory": str(base / "EN_part"),
                 "manifest_sha256": "x" * 64,
             }
+            class FakeResult:
+                markdown = {
+                    "markdown_texts": "| Field | Value |\\n|---|---|\\n| Name | Alice |",
+                    "markdown_images": {},
+                }
+                json = {"res": {"parsing_res_list": [], "overall_ocr_res": {
+                    "rec_texts": ["Name", "Alice"],
+                    "rec_boxes": [[1, 1, 10, 10], [20, 1, 40, 10]],
+                }}}
+                def save_to_json(self, save_path):
+                    Path(save_path).write_text(json.dumps(self.json))
             class FakeParser:
                 count = 0
                 def predict(self, path):
                     self.count += 1
-                    return [SimpleNamespace(markdown={
-                        "markdown_texts": "| Field | Value |\n|---|---|\n| Name | Alice |"
-                    })]
+                    return [FakeResult()]
+            class FakeOCR:
+                def predict(self, path):
+                    return [{"res": {"rec_texts": ["Name", "Alice", "Invoice total 10"],
+                             "rec_boxes": [[1, 1, 10, 10], [20, 1, 40, 10],
+                                           [1, 30, 50, 40]]}}]
             fake = FakeParser()
             with (patch.dict(sys.modules, {
-                      "paddleocr": SimpleNamespace(PPStructureV3=lambda **kw: fake)
+                      "paddleocr": SimpleNamespace(
+                          PPStructureV3=lambda **kw: fake,
+                          PaddleOCR=lambda **kw: FakeOCR())
                   }),
                   patch("ulm_extractor.ppstructure.version",
                         side_effect=lambda name: {
@@ -82,6 +98,11 @@ class PPStructureContracts(unittest.TestCase):
                 markdown = Path(data["text_path"])
                 self.assertEqual(markdown.suffix, ".md")
                 self.assertIn("| Name | Alice |", markdown.read_text())
+                self.assertIn("Invoice total 10", markdown.read_text())
+                self.assertIn("Additional OCR-recognized text", markdown.read_text())
+                self.assertTrue(Path(data["raw_json_paths"][0]).is_file())
+                self.assertTrue(Path(data["original_markdown_path"]).is_file())
+                self.assertTrue(Path(data["audit_path"]).is_file())
                 self.assertIsInstance(data["ocr_seconds"], float)
 
     def test_resume_rejects_mismatched_ppstructure_cache_config(self):
@@ -97,6 +118,7 @@ class PPStructureContracts(unittest.TestCase):
             index = {"format": FORMAT, "settings": SETTINGS,
                      "manifest_sha256": batch["manifest_sha256"],
                      "paddleocr_version": "3.7.0", "paddlex_version": "3.7.2",
+                     "recovery": RECOVERY, "fallback_settings": FALLBACK_SETTINGS,
                      "records": {key_for(record): {
                          "text_path": str(md), "ocr_seconds": 1.0}}}
             write_json(root / "index.json", index)
