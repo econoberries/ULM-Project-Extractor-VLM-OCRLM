@@ -29,14 +29,25 @@ Example LM input (illustrative):
 
 The benchmark question follows the JSON as plain text. This lets Qwen infer proximity, but does **not** reconstruct tables.
 
-**The fourth pipeline uses PP-StructureV3 instead:** pretrained document layout parsing, OCR, reading-order recovery, and table recognition produce one **`.md` Markdown file for each document**. We pass that file's UTF-8 contents directly to Qwen3.5, followed by the original question. Unlike coordinate JSON, Markdown can represent tables as rows/columns. No parser JSON or image pixels are sent to Qwen; figures/embedded images referenced by Markdown are not independently loaded by our LM.
+**The fourth pipeline uses PP-StructureV3 plus OCR completeness recovery, under the *same* `qwen35_ppstructure` model ID.** PP provides layout, OCR, reading order, tables, and initial Markdown. Inside the existing `.venv-ppstructure` parser job, we also run the **same English PaddleOCR constructor used in the flat OCR baseline** on the original image. PP's internal OCR and OCR on PP-generated image crops are additional sources. The code then:
+
+- Preserves PP's existing headings and HTML/Markdown tables.
+- Replaces local image references with text recognized in the corresponding layout region or by OCR over the actual Markdown image crop.
+- Recovers text missing *entirely* from PP Markdown, even when there is no image placeholder. If spatial placement is ambiguous, the text goes into an **"Additional OCR-recognized text (reading order)"** section rather than being silently discarded or placed in an invented table cell.
+- Saves PP's original Markdown, raw parser JSON, original-image OCR transcript, and a per-document recovery audit alongside the **resolved `.md`**. Only the resolved Markdown and unchanged OCRBench question are passed as text to Qwen3.5; the raw JSON and image data are never passed as visual input.
+
+This guarantees that lines output by the two recognizers are retained in the generated text (subject to conservative duplicate detection), **not** that OCR recognizes every character correctly or that ambiguous table cells can always be positioned accurately. The extra recognizer may raise OCR latency and GPU memory requirements. This is a repaired *implementation of the fourth pipeline*, not a new pipeline or model configuration.
 
 ```text
-image → PP-StructureV3 (.venv-ppstructure) → <document-key>.md
+image → PP-StructureV3 + English PaddleOCR (.venv-ppstructure)
+      → reconcile recognized text with PP regions and Markdown
+      → markdown/<document-key>.md
       → Qwen3.5-9B (.venv) → predictions → official KIE F1
 ```
 
-PP-StructureV3 can employ its **own OCR recognition models**, so this is a comparison of complete extraction architectures rather than a pure coordinate-only ablation. The CPU collector records separate OCR and LM times, and existing baselines are not modified.
+PP-StructureV3 can employ its **own OCR recognition models**, and the repaired mode also runs flat PaddleOCR, so it is a comparison of complete architectures, not a pure layout-only ablation. The original **59.01%** PP Markdown-only score remains a historical baseline; **do not attribute that score to the recovered-Markdown implementation until it has been rerun**. The CPU collector records parsing+OCR and LM times; other baselines and their cache formats are unchanged.
+
+**Cache safety:** the repaired PP Markdown has a new format signature (`ppstructurev3-markdown-recovered-v2`). The old Markdown-only `ppstructurev3` cache cannot be silently reused. **Submit a new batch with the same `model-ppstructure.yml`** to evaluate the correction. Do not edit or delete the historical `runs/` results; the revised run will have new batch/run UUIDs.
 
 
 ## Quick start: install on Helix
@@ -64,7 +75,7 @@ For an existing checkout, use `cd ~/ULM-Project-Extractor-VLM-OCRLM` followed by
 | `.venv` | **All** VLM and OCR→LM language-model jobs, CLI and scoring | PyTorch 2.14.1+cu130, Torchvision, Transformers |
 | `.venv-ocr` | Existing shared **flat-text** OCR worker | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.2 |
 | `.venv-la-ocr` | Existing **coordinate-JSON** OCR worker | Same pretrained PaddlePaddle/PaddleOCR versions, installed independently |
-| `.venv-ppstructure` | New **PP-StructureV3 Markdown** document parser | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0 with `doc-parser` extra, PaddleX 3.7.2 |
+| `.venv-ppstructure` | **PP-StructureV3 + internal English OCR recovery**, produces complete Markdown | PaddlePaddle GPU 3.3.0, PaddleOCR 3.7.0 with `doc-parser` extra, PaddleX 3.7.2 |
 
 Create/install **PyTorch/LM**:
 
@@ -218,7 +229,7 @@ test -n "$IMAGE" && sbatch --mem=64G --time=00:45:00 \
   slurm/check_environment.sbatch ppstructure "$IMAGE"
 ```
 
-Check `gpu-check-<JOBID>.out` for `PP-StructureV3 Markdown single-image inference: PASSED` and a Markdown preview. The flat OCR and coordinate-JSON logs should respectively end with `PaddleOCR single-image inference: PASSED` and `PaddleOCR layout single-image inference: PASSED`. For an optional one-document Qwen smoke test:
+Check `gpu-check-<JOBID>.out` for `PP-StructureV3 Markdown single-image inference: PASSED`, a **resolved** Markdown preview, and OCR recovery statistics. This tests both PP-StructureV3 and the full-image English OCR fallback on an allocated GPU. The flat OCR and coordinate-JSON logs should respectively end with `PaddleOCR single-image inference: PASSED` and `PaddleOCR layout single-image inference: PASSED`. For an optional one-document Qwen smoke test:
 
 ```bash
 sbatch --mem=64G --time=00:45:00 \
@@ -288,9 +299,14 @@ runs/
     logs/                     # batch and resume job logs
     ocr/paddleocr/            # original flat OCR text/timing cache
     ocr/paddleocr_layout/     # coordinate-aware JSON text/timing cache
-    ocr/ppstructurev3/        # structured Markdown cache, one .md per document
-      index.json              # parser settings, versions, timing, document keys
-      markdown/<key>.md       # exact UTF-8 content fed into Qwen
+    ocr/ppstructurev3/        # same parser engine, repaired Markdown v2
+      index.json              # cache version, settings, timing, audit paths
+      markdown/<key>.md       # final resolved text supplied to Qwen
+      original_markdown/      # unmodified PP rendering, for audit
+      raw_json/               # complete PP OCR and parsing results by page
+      fallback_ocr/           # English flat-OCR recognized text for each image
+      images/                 # PP's embedded crop images (where available)
+      audit/                  # counts of recovered and unplaced OCR lines
     benchmark_summary.csv
   benchmark_summary.csv
 ```
@@ -341,7 +357,8 @@ sbatch --partition=cpu-single --cpus-per-task=2 --mem=4G \
 | LA OCR + LM cannot find `ocr/paddleocr_layout/index.json` | Verify `.venv-la-ocr`, inspect the `ulm-la-ocr` Slurm job, and run the `la-ocr` one-image smoke test. |
 | PP-StructureV3 imports fail or doc parsing features are missing | Check `.venv-ppstructure/bin/python -m pip check`, ensure `-e '.[ppstructure]'` installed `paddleocr[doc-parser]`, and run the `ppstructure` GPU smoke test. |
 | PP-StructureV3 Markdown cache is missing/incomplete | Inspect the `ulm-ppstructure` job log and `runs/batches/<batch-id>/ocr/ppstructurev3/index.json`; incomplete documents are resumable. |
-| PP-StructureV3 produces empty Markdown | Check that image/parser output; the job rejects empty Markdown rather than passing an empty prompt to Qwen. |
+| PP-StructureV3 produces empty Markdown | The parser job now permits initially empty PP Markdown, recovers text from full-image English OCR/PP internal OCR and raises an error only if the final Markdown is empty. Inspect `raw_json/`, `fallback_ocr/`, and `audit/`. |
+| Earlier PP cache rejected after code update | Expected: the old Markdown-only cache has a different format. Submit a new `benchmark --models model-ppstructure.yml` batch, preserving previous results. |
 | Scoring fails after predictions were saved | Inspect `runs/<run-id>/scoring.log`. The English KIE evaluator requirements omit `Polygon3`; rerun the CPU collector rather than GPU inference. |
 
 ## References
