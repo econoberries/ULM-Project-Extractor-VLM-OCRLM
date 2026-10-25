@@ -52,8 +52,10 @@ def run_model(batch, run_id):
             if engine == "paddleocr_layout" and cache.get("format") != "paddleocr-layout-v1":
                 raise ValueError("Layout OCR cache format mismatch")
             if engine == "ppstructurev3":
-                from .ppstructure import FORMAT, SETTINGS
-                if cache.get("format") != FORMAT or cache.get("settings") != SETTINGS:
+                from .ppstructure import FORMAT, SETTINGS, RECOVERY, FALLBACK_SETTINGS
+                if cache.get("format") != FORMAT or cache.get("settings") != SETTINGS or
+                    cache.get("recovery") != RECOVERY or
+                    cache.get("fallback_settings") != FALLBACK_SETTINGS:
                     raise ValueError("PP-StructureV3 Markdown cache configuration mismatch")
             ocr_index = cache["records"]
             if len(ocr_index) != 400 or any(key_for(r) not in ocr_index for r in records):
