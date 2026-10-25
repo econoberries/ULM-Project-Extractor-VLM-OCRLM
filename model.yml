@@ -28,3 +28,9 @@ models:
     adapter: qwen25
     checkpoint: Qwen/Qwen2.5-14B-Instruct-1M
     ocr: paddleocr
+
+  - id: qwen35_laocr
+    pipeline: la_ocr_lm
+    adapter: qwen35
+    checkpoint: Qwen/Qwen3.5-9B
+    ocr: paddleocr_layout

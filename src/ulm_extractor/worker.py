@@ -43,14 +43,17 @@ def run_model(batch, run_id):
               if key_for(record) not in existing or existing[key_for(record)].get("error")]
     try:
         ocr_index = None
-        if spec["pipeline"] == "ocr_lm":
-            cache_path = Path(batch["output_root"]) / "batches" / batch["batch_id"] / "ocr" / "paddleocr" / "index.json"
+        if spec.get("ocr") is not None:
+            engine = spec["ocr"]
+            cache_path = Path(batch["output_root"]) / "batches" / batch["batch_id"] / "ocr" / engine / "index.json"
             cache = read_json(cache_path)
             if cache.get("manifest_sha256") != batch["manifest_sha256"]:
                 raise ValueError("OCR cache does not match the benchmark manifest")
+            if engine == "paddleocr_layout" and cache.get("format") != "paddleocr-layout-v1":
+                raise ValueError("Layout OCR cache format mismatch")
             ocr_index = cache["records"]
             if len(ocr_index) != 400 or any(key_for(r) not in ocr_index for r in records):
-                raise ValueError("Shared OCR cache is incomplete; not loading the language model")
+                raise ValueError(f"Shared {engine} cache is incomplete; not loading the language model")
         if to_run:
             model.load()
             environment = model.environment()
@@ -112,16 +115,16 @@ def run_model(batch, run_id):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m ulm_extractor.worker")
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("ocr", "run", "collect"):
+    for name in ("ocr", "ocr-layout", "run", "collect"):
         p = sub.add_parser(name)
         p.add_argument("--batch", type=Path, required=True)
         if name == "run":
             p.add_argument("--run-id", required=True)
     args = parser.parse_args(argv)
     batch = read_json(args.batch)
-    if args.action == "ocr":
+    if args.action in {"ocr", "ocr-layout"}:
         from .ocr import run_ocr
-        run_ocr(batch)
+        run_ocr(batch, engine="paddleocr_layout" if args.action == "ocr-layout" else "paddleocr")
     elif args.action == "run":
         run_model(batch, args.run_id)
     else:

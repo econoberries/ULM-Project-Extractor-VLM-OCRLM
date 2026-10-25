@@ -1,5 +1,8 @@
 """Model-specific input processors; original OCRBench questions are never rewritten."""
+import json
 import time
+
+from .layout import FORMAT
 from pathlib import Path
 
 class InferenceAdapter:
@@ -70,6 +73,11 @@ class InferenceAdapter:
         else:
             if ocr_text is None:
                 raise ValueError("OCR->LM requires extracted text")
+            if self.config["pipeline"] == "la_ocr_lm":
+                layout = json.loads(ocr_text)
+                if (not isinstance(layout, dict) or layout.get("format") != FORMAT
+                        or not isinstance(layout.get("lines"), list)):
+                    raise ValueError("Expected PaddleOCR layout JSON with coordinates")
             payload = ocr_text + "\n\n" + question
             content = payload if adapter == "qwen25" else [{"type": "text", "text": payload}]
             messages = [{"role": "user", "content": content}]

@@ -29,21 +29,24 @@ def _completed_predictions(path, documents):
     )
 
 
-def _ocr_cache_complete(batch, documents):
+def _ocr_cache_complete(batch, documents, engine="paddleocr"):
     index_path = (
         Path(batch["output_root"]) / "batches" / batch["batch_id"]
-        / "ocr" / "paddleocr" / "index.json"
+        / "ocr" / engine / "index.json"
     )
     if not index_path.is_file():
         return False
     index = read_json(index_path)
     if index.get("manifest_sha256") != batch["manifest_sha256"]:
         raise ValueError("Existing PaddleOCR cache has a different dataset manifest")
+    if engine == "paddleocr_layout" and index.get("format") != "paddleocr-layout-v1":
+        raise ValueError("Existing layout OCR cache has an incompatible format")
     # The resume CLI runs from .venv (PyTorch), but the OCR model runs
     # exclusively from .venv-ocr. Check the *correct* PaddleOCR installation.
-    ocr_python = ROOT / ".venv-ocr" / "bin" / "python"
+    env_dir = ".venv-la-ocr" if engine == "paddleocr_layout" else ".venv-ocr"
+    ocr_python = ROOT / env_dir / "bin" / "python"
     if not ocr_python.is_file():
-        raise ValueError("Missing .venv-ocr/bin/python; create OCR environment first")
+        raise ValueError(f"Missing {env_dir}/bin/python; create OCR environment first")
     try:
         proc = subprocess.run([
             str(ocr_python), "-c",
@@ -51,7 +54,7 @@ def _ocr_cache_complete(batch, documents):
         ], capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as exc:
         raise ValueError(
-            f"Cannot inspect PaddleOCR in .venv-ocr: {exc.stderr}"
+            f"Cannot inspect PaddleOCR in {env_dir}: {exc.stderr}"
         ) from exc
     installed_version = proc.stdout.strip()
     if index.get("paddleocr_version") != installed_version:
@@ -122,12 +125,16 @@ def resume_batch(batch_path, args):
         print(f"SKIP: {experiment} — {why}", flush=True)
     print(f"Resume batch {batch['batch_id']}: {len(pending)} GPU model jobs selected", flush=True)
 
-    # A complete cache can be reused. Otherwise the existing OCR worker resumes
-    # from its per-document text index, and OCR-LM workers depend on that job.
-    ocr_needed = any(s["pipeline"] == "ocr_lm" for s in pending)
-    if ocr_needed and _ocr_cache_complete(batch, documents):
-        print("Shared PaddleOCR cache is complete; no OCR GPU job needed", flush=True)
-        ocr_needed = False
+    # Each OCR representation has its own cache and resume dependencies.
+    required_engines = {s.get("ocr") for s in pending if s.get("ocr")}
+    ocr_needed = set()
+    for engine in ("paddleocr", "paddleocr_layout"):
+        if engine not in required_engines:
+            continue
+        if _ocr_cache_complete(batch, documents, engine):
+            print(f"Shared {engine} cache complete; no OCR GPU job needed", flush=True)
+        else:
+            ocr_needed.add(engine)
 
     gpu_base = [
         "sbatch", "--parsable", "--partition", args.partition,
@@ -139,18 +146,22 @@ def resume_batch(batch_path, args):
     logpath = str(batchdir / "logs" / "%x-%j.out")
     jobs = {}
     batcharg = str(batch_path)
-    if ocr_needed:
-        jobs["paddleocr"] = _sbatch([
-            *gpu_base, "--job-name", "ulm-ocr-resume", "--output", logpath,
-            str(ROOT / "slurm" / "worker.sbatch"), "ocr", "--batch", batcharg
-        ], args.dry_run)
+    for engine, action, jobname in (
+        ("paddleocr", "ocr", "ulm-ocr-resume"),
+        ("paddleocr_layout", "ocr-layout", "ulm-la-ocr-resume"),
+    ):
+        if engine in ocr_needed:
+            jobs[engine] = _sbatch([
+                *gpu_base, "--job-name", jobname, "--output", logpath,
+                str(ROOT / "slurm" / "worker.sbatch"), action, "--batch", batcharg
+            ], args.dry_run)
     for spec in pending:
         command = [
             *gpu_base, "--job-name", f"ulm-{spec['id'][:30]}-resume",
             "--output", logpath,
         ]
-        if spec["pipeline"] == "ocr_lm" and ocr_needed:
-            command += ["--dependency", f"afterany:{jobs['paddleocr']}"]
+        if spec.get("ocr") in ocr_needed:
+            command += ["--dependency", f"afterany:{jobs[spec['ocr']]}"]
         command += [
             str(ROOT / "slurm" / "worker.sbatch"),
             "run", "--batch", batcharg, "--run-id", spec["run_id"],

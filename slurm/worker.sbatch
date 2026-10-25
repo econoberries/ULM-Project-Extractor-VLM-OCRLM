@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # SLURM GPU worker. PaddleOCR and PyTorch use isolated Python environments:
-#   ocr -> .venv-ocr (PaddlePaddle GPU)
-#   run -> .venv     (PyTorch VLM / OCR+LM)
+#   ocr -> .venv-ocr (flat PaddleOCR)
+#   ocr-layout -> .venv-la-ocr (coordinate-preserving PaddleOCR)
+#   run -> .venv (PyTorch VLM / OCR+LM / LA-OCR+LM)
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 
 if [[ $# -lt 1 ]]; then
-  echo "Missing worker action: expected ocr or run." >&2
+  echo "Missing worker action: expected ocr, ocr-layout or run." >&2
   exit 2
 fi
 
 case "$1" in
   ocr) python_bin=".venv-ocr/bin/python" ;;
+  ocr-layout) python_bin=".venv-la-ocr/bin/python" ;;
   run) python_bin=".venv/bin/python" ;;
   *)
-    echo "Unsupported GPU worker action '$1'; expected ocr or run." >&2
+    echo "Unsupported GPU worker action '$1'; expected ocr, ocr-layout or run." >&2
     exit 2
     ;;
 esac

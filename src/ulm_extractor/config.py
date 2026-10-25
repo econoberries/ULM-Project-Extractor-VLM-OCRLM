@@ -9,7 +9,7 @@ PINNED = {
     "minicpm": ("openbmb/MiniCPM-V-4.6", "36f34a661a4bd35d0dc2294cb044d2584646c7d3"),
     "qwen25": ("Qwen/Qwen2.5-14B-Instruct-1M", "620fad32de7bdd2293b3d99b39eba2fe63e97438"),
 }
-PIPELINES = {"qwen35": {"vlm", "ocr_lm"}, "minicpm": {"vlm"}, "qwen25": {"ocr_lm"}}
+PIPELINES = {"qwen35": {"vlm", "ocr_lm", "la_ocr_lm"}, "minicpm": {"vlm"}, "qwen25": {"ocr_lm"}}
 
 def load_config(path):
     with Path(path).open(encoding="utf-8") as f:
@@ -53,8 +53,9 @@ def load_config(path):
         if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
             raise ValueError(f"{exp_id}: revision must be an immutable 40-character commit SHA")
         ocr = item.get("ocr")
-        if pipe == "ocr_lm" and ocr != "paddleocr":
-            raise ValueError(f"{exp_id}: OCR->LM requires ocr: paddleocr")
+        expected_ocr = {"ocr_lm": "paddleocr", "la_ocr_lm": "paddleocr_layout"}.get(pipe)
+        if expected_ocr is not None and ocr != expected_ocr:
+            raise ValueError(f"{exp_id}: {pipe} requires ocr: {expected_ocr}")
         if pipe == "vlm" and ocr is not None:
             raise ValueError(f"{exp_id}: direct VLM must not declare an OCR engine")
         overrides = item.get("inference") or {}

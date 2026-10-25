@@ -1,0 +1,15 @@
+# Run only the new coordinate-preserving OCR -> Qwen3.5 experiment.
+version: 1
+
+inference:
+  prompt_mode: benchmark_native
+  max_new_tokens: 384
+  batch_size: 1
+  do_sample: false
+
+models:
+  - id: qwen35_laocr
+    pipeline: la_ocr_lm
+    adapter: qwen35
+    checkpoint: Qwen/Qwen3.5-9B
+    ocr: paddleocr_layout

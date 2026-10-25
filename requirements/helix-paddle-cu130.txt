@@ -1,8 +1,8 @@
 # PaddlePaddle CUDA 13.0 distribution for the *separate* OCR environment.
-# Install only into .venv-ocr, NEVER into .venv (PyTorch/Transformers).
+# Install only into .venv-ocr or .venv-la-ocr, NEVER into .venv (PyTorch/Transformers).
 # Paddle GPU 3.3.0 and Torch 2.14.1 demand incompatible nvidia-cudnn-cu13
 # and nvidia-nccl-cu13 versions when installed in the SAME environment.
 # Both isolated environments can share the GPU through independent SLURM jobs.
-# Use ./venv-ocr/bin/python -m pip (without replacing PyTorch CUDA dependencies).
+# Use the chosen OCR venv/bin/python -m pip (without replacing PyTorch CUDA dependencies).
 --index-url https://www.paddlepaddle.org.cn/packages/stable/cu130/
 paddlepaddle-gpu==3.3.0

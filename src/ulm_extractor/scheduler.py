@@ -61,22 +61,24 @@ def submit_batch(data, models, args):
     ]
     logpath = str(batchdir / "logs" / "%x-%j.out")
     batcharg = str(specpath)
-    needs_ocr = any(x["pipeline"] == "ocr_lm" for x in runs)
     jobs = {}
-    if needs_ocr:
-        jobs["paddleocr"] = _sbatch([
-            *gpu_base, "--job-name", "ulm-ocr",
-            "--output", logpath,
-            str(ROOT / "slurm" / "worker.sbatch"),
-            "ocr", "--batch", batcharg,
-        ], args.dry_run)
+    for engine, action, job_name in (
+        ("paddleocr", "ocr", "ulm-ocr"),
+        ("paddleocr_layout", "ocr-layout", "ulm-la-ocr"),
+    ):
+        if any(x.get("ocr") == engine for x in runs):
+            jobs[engine] = _sbatch([
+                *gpu_base, "--job-name", job_name, "--output", logpath,
+                str(ROOT / "slurm" / "worker.sbatch"),
+                action, "--batch", batcharg,
+            ], args.dry_run)
     for model in runs:
         command = [
             *gpu_base, "--job-name", f"ulm-{model['id'][:30]}",
             "--output", logpath,
         ]
-        if model["pipeline"] == "ocr_lm":
-            command += ["--dependency", f"afterany:{jobs['paddleocr']}"]
+        if model.get("ocr") is not None:
+            command += ["--dependency", f"afterany:{jobs[model['ocr']]}"]
         command += [
             str(ROOT / "slurm" / "worker.sbatch"),
             "run", "--batch", batcharg, "--run-id", model["run_id"]

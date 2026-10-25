@@ -12,3 +12,6 @@ gpu-check-*.out
 
 # Isolated PaddleOCR/PaddlePaddle GPU environment
 /.venv-ocr/
+
+# Separate coordinate-preserving PaddleOCR environment
+/.venv-la-ocr/
