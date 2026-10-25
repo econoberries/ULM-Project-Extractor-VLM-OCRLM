@@ -12,6 +12,8 @@
 # From repository root:
 #   sbatch slurm/check_environment.sbatch torch    # .venv (PyTorch)
 #   sbatch slurm/check_environment.sbatch paddle   # .venv-ocr (PaddlePaddle)
+#   sbatch --gres=gpu:H200:1 --export=ALL,EXTRACTOR_EXPECT_GPU=H200 slurm/check_environment.sbatch paddle
+# The #SBATCH GPU request defaults to A100; --gres on the command line overrides it.
 #   sbatch slurm/check_environment.sbatch ocr /path/to/image.jpg
 # Optional:
 #   sbatch --mem=64G --time=00:45:00 slurm/check_environment.sbatch model /path/to/EN_part qwen35_vlm
@@ -43,10 +45,13 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
   exit 2
 fi
 nvidia-smi
-if ! nvidia-smi --query-gpu=name --format=csv,noheader | grep -qi A100; then
-  echo "Requested A100, but no A100 GPU was reported." >&2
+expected_gpu="${EXTRACTOR_EXPECT_GPU:-A100}"
+if ! nvidia-smi --query-gpu=name --format=csv,noheader | grep -qiF "$expected_gpu"; then
+  echo "Expected GPU containing '$expected_gpu', but the allocation reports:" >&2
+  nvidia-smi --query-gpu=name --format=csv,noheader >&2
   exit 2
 fi
+echo "GPU family check: $expected_gpu"
 
 case "$1" in
   torch)
