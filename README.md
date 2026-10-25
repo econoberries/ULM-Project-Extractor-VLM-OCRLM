@@ -272,6 +272,95 @@ The new schedule is **PP-StructureV3 parser job (`.venv-ppstructure`) → Qwen3.
 
 The scorer defaults to `../MultimodalOCR/OCRBench_v2/eval_scripts/eval.py` relative to this repository; pass `--evaluator PATH` if your upstream checkout differs.
 
+## Repeat the original four baseline models (no LA OCR or PP-Structure)
+
+Use [`model-baselines.yml`](model-baselines.yml) and
+[`scripts/run_repeated_baselines.sh`](scripts/run_repeated_baselines.sh).
+This selection is **only** the four original experiments:
+`qwen35_vlm`, `minicpm_vlm`, `qwen35_ocr`, and `qwen25_ocr`.
+It retains the same pinned checkpoints, unmodified OCRBench questions,
+`max_new_tokens: 384`, `do_sample: false`, and the full 400-document dataset.
+
+The **single positional parameter** is the number of complete repetitions.
+**Recommended starting point: three**. For example, on the Helix login node:
+
+```bash
+cd ~/ULM-Project-Extractor-VLM-OCRLM
+git pull --ff-only origin main
+export EN_PART="$HOME/ULM-VLM-OCR-IE/data/OCRBench_v2/EN_part"
+export GPU_TYPE=A100
+
+# Validate the complete three-repeat Slurm plan without submitting anything:
+bash scripts/run_repeated_baselines.sh 3 --dry-run
+
+# Submit three full independent batches, each containing four models:
+bash scripts/run_repeated_baselines.sh 3
+```
+
+To repeat five times instead, change **only** the positional argument:
+`bash scripts/run_repeated_baselines.sh 5`. The script accepts 1–20
+repetitions to protect against accidental very large submissions. Optional
+environment variables: `GPU_PARTITION`, `COLLECT_PARTITION`, `GPU_MEM`,
+`GPU_CPUS`, `GPU_TIME`, `EVALUATOR_PATH`, and `REPEAT_OUTPUT_BASE`.
+For example, `GPU_TIME=04:00:00` raises the GPU-job time limit. Run this
+script from the login node, not inside an `sbatch` job. It **queues** jobs
+and does **not** wait for their completion; check `squeue -u "$USER"` and
+the relevant Slurm logs.
+
+Each complete repetition schedules **five GPU jobs**
+(two VLM jobs, one shared flat PaddleOCR extraction, and two OCR→LM jobs)
+plus one **CPU collector**, using the existing Slurm dependency design.
+The script runs the OCR extraction independently per repetition to measure
+end-to-end execution, while sharing flat OCR between both OCR→LM models
+*within* each repetition. All repetitions are queued when the command runs;
+the Slurm scheduler manages their execution subject to your allocation.
+For GPU-memory comparisons, check the actual allocated A100 variant (40 GB
+or 80 GB) rather than assuming the `A100` label fixes VRAM.
+
+To prevent confusing repeated measurements with older PP/LA experiments,
+the script creates one **new series directory** per invocation:
+
+```text
+runs/repeated_baselines/
+  baselines-<UTC-timestamp>-<unique-suffix>/
+    series_manifest.tsv          # repeat_index, batch_id, paths, job IDs, git SHA
+    repeat-001/
+      submission.log
+      batches/<batch-id>/benchmark_summary.csv
+      <run-id>/predictions_scored.json
+    repeat-002/
+      ...
+    repeat-003/
+      ...
+```
+
+Each repetition has new batch/run UUIDs. **No existing `runs/` artifacts
+are deleted or overwritten.** The script prints the exact series path.
+After the CPU collectors finish, aggregate only that series:
+
+```bash
+.venv/bin/python scripts/aggregate_repeated_baselines.py \
+  runs/repeated_baselines/<series-id>
+```
+
+This writes `repeated_runs.csv` (all individual runs and statuses) and
+`repeat_summary.csv` (mean and sample SD for accuracy and latency) inside
+that series folder. Pending or failed runs are **not** counted as zero.
+It rejects different dataset manifest hashes, and it never includes
+other historical experiments or PP/LA OCR. Monitor statuses in
+`repeated_runs.csv` and rerun the aggregator after the collectors finish.
+
+**Statistical interpretation:** all runs use the *same* 400 images, pinned
+weights, `do_sample: false`, and default deterministic generation options.
+Three repetitions are a reasonable initial check of runtime and software
+reproducibility, but are **not 1,200 independent test documents per model**.
+Report accuracy on 400 matched images, and estimate accuracy uncertainty
+using a **paired document-level bootstrap** or similarly appropriate
+within-document method. If accuracy differs negligibly across runs, further
+repetition adds little statistical information; increase to five mainly to
+stabilize time/resource measurements. Queuing and competing GPU activity
+may still contribute to latency variation.
+
 ## Monitor runs and read results
 
 ```bash
