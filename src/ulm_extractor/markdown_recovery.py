@@ -152,7 +152,7 @@ def resolve_markdown(markdown, parser_result, flat_ocr_lines, image_ocr=None):
         src = found.group(1) if found else ""
         region = next((b for b in image_blocks if src and src in b["content"]), None)
         if region is None and len(image_blocks) == len(placeholders):
-            region = image_blocks[placeholders.index(match)]
+            region = image_blocks[next(i for i, ph in enumerate(placeholders)\n                                       if ph.start() == match.start())]
         recovered = []
         if region and region["bbox"]:
             for i, line in enumerate(lines):
