@@ -130,7 +130,7 @@ First check package versions and environment separation on the login node:
 **Important:** Helix login nodes may not expose `libcuda.so.1`. The dependency checker then prints `DEFERRED import paddle`: that is expected and is **not proof GPU inference works**. Choose a GPU family (`A100` by default, or `H200` on Helix) and verify both runtimes on an allocated GPU:
 
 ```bash
-export GPU_TYPE=A100   # Change to H200 to request a Helix H200
+echo "Testing GPU family: $GPU_TYPE"  # Selected in step 4
 sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
   slurm/check_environment.sbatch torch
 sbatch --gres="gpu:${GPU_TYPE}:1" --export="ALL,EXTRACTOR_EXPECT_GPU=${GPU_TYPE}" \
