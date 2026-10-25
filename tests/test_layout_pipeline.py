@@ -52,7 +52,7 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertEqual(selected[0]["ocr"], "paddleocr_layout")
         all_models = load_config(ROOT / "model.yml")
         self.assertEqual(len(all_models), 6)
-        self.assertEqual(len({x["id"] for x in all_models}), 5)
+        self.assertEqual(len({x["id"] for x in all_models}), 6)
         self.assertEqual([m["id"] for m in all_models if m["pipeline"] == "la_ocr_lm"],
                          ["qwen35_laocr"])
 
